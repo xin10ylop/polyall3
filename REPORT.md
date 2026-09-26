@@ -69,8 +69,22 @@ leaderboard while having collected $24.3k in rewards. So reward farmers never sh
     on ≈$13.5k.
 
 ### 2.3 Supply of uncontested, quiet pools (`research/pool_tracker.py`, `research/quiet_pools.py`)
-One window only: Saturday 2026-09-26, 17:55–20:10 UTC (2.25 h, 28 snapshots). **Persistence over days or weekdays is
-not measured.**
+Measured on Saturday 2026-09-26 from 17:55 UTC, first over 2.25 h (28 snapshots), then re-run over 3.58 h
+(44 snapshots). **Persistence over days or weekdays is not measured.**
+* **Re-run over 3.58 h:** 255 pools ($6.8k/day) were uncontested in every snapshot; 178 ($4.7k/day) were quiet; 160
+  ($4.2k/day) pass the bot's filters. The stable set shrinks slowly while new empty pools keep appearing.
+* **Empty pools are mostly new pools.** Half of the stable-uncontested pools (128 of 255, $3.1k/day) got their reward
+  config today and 95 more in the previous two days. Across all markets, pools whose config started ≤ 2026-09-20 are
+  86% contested by dollars.
+* **Competitors arrive.** Of the 488 pools empty at 17:55, 86 were contested and 70 had left the listing by 21:25. A
+  competitor that stayed for at least 3 snapshots arrived within 3.6 h in 34% of pools started today, versus 13–17%
+  of older ones.
+  * Farmers therefore routinely enter pools where they are alone at first. That is mild evidence that lone quoting
+    is not known to be worthless.
+  * For the bot, this means shares will fall below 100% over time. The universe refresh moves capital to pools that
+    are still empty, since new ones appear every day. A realistic long-run share is below the formula's 100%, and
+    this was not measured.
+* **The original 2.25-h window** (the figures below):
 * At any single moment, $13.3k–27.9k/day of non-weather pools (median $20.7k) had no competing liquidity inside the
   band.
 * **302 pools ($8.3k/day) stayed uncontested in every snapshot.** Of the pools uncontested at the start, 68% were
@@ -82,10 +96,13 @@ not measured.**
 * Pool sizes are small: $10–65/day (median ≈$25). Topics include AI model release dates and API prices
   (insider-prone), elections, awards, crypto/finance, geopolitics and sports.
 * Why would farmers leave these pools alone? Possible reasons:
-  1. They are small ($25/day) and not worth big farmers' attention.
-  2. Insider-prone topics.
-  3. An undocumented payout rule.
-  The pilot tests (3) on ~5 pools over a few days. It does not test persistence, competitor response, or tail events.
+  1. Most are new (hours to a few days old) and farmers have not arrived yet. This is supported by the start-date and
+     arrival data above.
+  2. They are small ($25/day) and not worth big farmers' attention.
+  3. Insider-prone topics.
+  4. An undocumented payout rule.
+  The pilot tests (4) on ~5 pools over a few days. It does not test long-run persistence, competitor response, or
+  tail events.
 
 ### 2.4 Risk backtest, and the payout question
 * **Replay** (`research/quiet_risk_bt.py`): for each of 315 pools that were uncontested over 1.75 h ($8,725/day),
