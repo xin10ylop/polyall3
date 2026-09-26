@@ -226,7 +226,32 @@ optimistic and is **not** used.
 | Leaderboard forensics | 3,102 wallets | See §1, rows 5, 8 and 9. |
 
 ## 6. Forward-test results
-_Filled in at the end of the session._
+Paper mode means live order books, real cache-busted trade prints, and simulated queue-position fills. The runs use the
+fixed code of commit e8cb20c, which already has the audit #3 fixes. They started 2026-09-26 20:53 UTC. The figures
+below are as of 23:00 UTC (2.1 h, 379 cycles each), and the runs continue.
+
+| Run | Pools quoted | Collateral locked | Formula reward rate | Fills | Fill P&L at mid | Jump cooldowns |
+|---|---|---|---|---|---|---|
+| $100 | 5 | $91 | $250/day | 0 | $0.00 | 0 |
+| $1,000 | 55 | $994 | $2,289/day | 3 (13.0 bid, 6.5 bid, 6.2 ask shares) | −$1.77 (range −$2.57 to +$0.58) | 8 |
+
+**What this shows**
+* The loop runs cleanly: no exceptions, a universe refresh every ~31 min, and every quote post-only and inside the
+  band.
+* Fills are rare, as the replay predicted. The $1,000 run's fill losses are small next to its reward *estimate*.
+* The jump guard fires on exactly the insider-prone topics §2.3 warned about. There were 27.5¢, 26¢, 20.5¢ and 13.5¢
+  moves in AI-model output-price markets within 5 minutes, and the guard pulled quotes to unwind-only.
+  * On paper, the only fill in such a market (6.2 shares) cost little. Live, a quote resting at the moment of such a
+    move can lose up to one quote size (≈$10–20).
+
+**What this does not show**
+* **The reward numbers are the formula, not income.** They assume a 100% share of empty pools and the unverified
+  lone-quoter payout.
+* 2 hours is far too short to measure fill losses; the 7-day replay in §2.4 is the better estimate.
+* Paper fills cannot reproduce how other traders react to our quotes.
+
+Earlier runs, on pre-fix code, are not counted. They showed the same picture: $100 runs quoted 5 pools at
+$218–265/day for 0.6–1.3 h with 0–1 fills, and $1,000 runs quoted 54 pools at $2.4–2.5k/day with 0–1 fills.
 
 ## 7. The decisive test: a $100 live pilot (procedure and pre-committed decision rule)
 The public aggregate checks have been done (§2.4), and no public record isolates a lone quoter. The question that decides between a small edge (≈0.2–0.3%/day, like
