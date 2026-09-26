@@ -49,3 +49,41 @@ def test_poll_fills_placed_filter_queue_and_dedupe(monkeypatch):
     ev = pb.poll_fills({"c": c})
     assert [(e[2], e[3]) for e in ev] == [("bid", 5.0)]
     assert pb.poll_fills({"c": c}) == []                            # same prints are not re-applied
+
+
+
+def test_h1_late_print_fills_order_that_was_resting(monkeypatch):
+    import time as _t
+    from pmbot import paper as P
+    pb = PaperBroker(log=lambda *a: None)
+    c = {"cid": "c", "yes": "Y", "no": "N"}
+    pb.sync({"c": [Order("c", "Y", "BUY", 0.40, 20, "bid", 0.40)]}, {"c": {"bids": [], "asks": []}})
+    t_sweep = int(_t.time()) + 1
+    # engine reprices to 0.37 before the sweep print is indexed
+    pb.sync({"c": [Order("c", "Y", "BUY", 0.37, 20, "bid", 0.37)]}, {"c": {"bids": [], "asks": []}})
+    for r in pb.recent:
+        r["removed"] = t_sweep + 5
+    for r in pb.resting.values():
+        r["placed"] = t_sweep + 5
+    sweep = {"transactionHash": "s1", "proxyWallet": "m", "asset": "Y", "size": "50", "price": "0.37", "side": "BUY",
+             "timestamp": t_sweep}
+    monkeypatch.setattr(P.api, "market_trades", lambda cid, taker_only=True, **k: [] if taker_only else [sweep])
+    ev = pb.poll_fills({"c": c})
+    assert [(e[2], e[3]) for e in ev] == [("bid", 20.0)]          # the 0.40 bid (resting at sweep time) is filled
+    assert abs(pb.cash + 8.0) < 1e-9
+
+
+def test_h1_no_replay_of_old_prints_for_long_resting_orders(monkeypatch):
+    import time as _t
+    from pmbot import paper as P
+    pb = PaperBroker(log=lambda *a: None)
+    c = {"cid": "c", "yes": "Y", "no": "N"}
+    pb.sync({"c": [Order("c", "Y", "BUY", 0.40, 20, "bid", 0.40)]}, {"c": {"bids": [(0.40, 70.0)], "asks": []}})
+    r = next(iter(pb.resting.values()))
+    r["placed"] = _t.time() - 5 * 3600                                # order resting for 5 h
+    pr = {"transactionHash": "p1", "proxyWallet": "m", "asset": "Y", "size": "30", "price": "0.40", "side": "BUY",
+          "timestamp": int(_t.time() - 4 * 3600)}
+    monkeypatch.setattr(P.api, "market_trades", lambda cid, taker_only=True, **k: [] if taker_only else [pr])
+    for _ in range(5):
+        pb.poll_fills({"c": c})
+    assert r["queue_ahead"] == 40.0 and pb.fills == []               # applied once, never replayed

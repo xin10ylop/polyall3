@@ -5,14 +5,20 @@
   at that price level when it was placed. A trade can only fill orders that were already resting when it happened.
 * The trade feed is read with a cache-buster (the data-api CDN caches it for up to 300 s); trades are de-duplicated
   by identity, not by a wall-clock cursor, so late-arriving prints are still applied.
+* The data-api indexes trades 30-90 s late. Orders that were repriced or cancelled are therefore kept for `RETAIN`
+  seconds with their [placed, removed] interval, and a late print fills whichever order was resting when it traded
+  (a live maker is filled at the moment of the sweep, not when the print shows up in the feed).
 * Fills come from MAKER legs of real trades (data-api takerOnly=false minus taker rows), which carry each maker's
   exact level price (taker rows carry a sweep VWAP). A maker fill strictly beyond our price means the level we rest at
   was swept -> we fill first (price priority). A maker fill AT our price consumes queue_ahead first, then us.
 * No automatic YES+NO merge (live does not merge either): pairs stay as locked collateral worth $1 at resolution.
 """
 import time
+from concurrent.futures import ThreadPoolExecutor
 from . import api
 from .engine import Inv
+
+RETAIN = 300   # seconds a removed paper order can still be filled by late-indexed prints
 
 
 class PaperBroker:
@@ -22,6 +28,7 @@ class PaperBroker:
         self.inv = {}          # cid -> Inv
         self.cash = 0.0
         self.seen = {}         # trade identity -> timestamp (dedupe)
+        self.recent = []       # removed orders: dict(o, queue_ahead, filled, placed, removed)
         self.fills = []
 
     # ---------- orders ----------
@@ -36,6 +43,11 @@ class PaperBroker:
                     new[k] = old
                 else:
                     new[k] = {"o": o, "queue_ahead": _displayed(st, o), "filled": 0.0, "placed": now}
+        for k, r in self.resting.items():
+            if k not in new or new[k] is not r:
+                r["removed"] = now
+                self.recent.append(r)
+        self.recent = [r for r in self.recent if now - r["removed"] <= RETAIN and r["o"].size - r["filled"] > 1e-9]
         self.resting = new
 
     def own_orders(self, c):
@@ -44,24 +56,26 @@ class PaperBroker:
     # ---------- fills ----------
     def poll_fills(self, cfgs, tracked_cids=()):
         by_cid = {}
-        for k, r in self.resting.items():
+        for r in list(self.resting.values()) + self.recent:
             by_cid.setdefault(r["o"].cid, []).append(r)
+        cids = [c for c in by_cid if c in cfgs]
+
+        def fetch(cid):
+            return cid, api.market_trades(cid, taker_only=False), api.market_trades(cid, taker_only=True)
+        with ThreadPoolExecutor(8) as ex:
+            feeds = list(ex.map(fetch, cids))
+        key = lambda t: (t["transactionHash"], t["proxyWallet"], t["asset"], t["size"], t["price"])
         events = []
-        for cid, rs in by_cid.items():
-            c = cfgs.get(cid)
-            if not c:
-                continue
-            allr = api.market_trades(cid, taker_only=False)
-            tak = api.market_trades(cid, taker_only=True)
+        for cid, allr, tak in feeds:
             if allr is None or tak is None:
                 continue
-            key = lambda t: (t["transactionHash"], t["proxyWallet"], t["asset"], t["size"], t["price"])
+            c, rs = cfgs[cid], by_cid[cid]
             takers = {key(t) for t in tak}
-            oldest_order = min(r["placed"] for r in rs)
+            oldest = min(r["placed"] for r in rs)
             makers = []
             for t in allr:
                 k = key(t)
-                if k in takers or k in self.seen or t["timestamp"] < oldest_order - 1:
+                if k in takers or k in self.seen or t["timestamp"] < oldest - 1:
                     continue
                 self.seen[k] = t["timestamp"]
                 makers.append(t)
@@ -70,11 +84,14 @@ class PaperBroker:
                 if not ys:
                     continue
                 side, p, qty = ys
+                ts = t["timestamp"]
                 for r in rs:
                     o = r["o"]
                     rem = o.size - r["filled"]
-                    if rem <= 1e-9 or qty <= 1e-9 or o.ys_side != side or t["timestamp"] < r["placed"] - 1:
+                    if rem <= 1e-9 or qty <= 1e-9 or o.ys_side != side:
                         continue
+                    if ts < r["placed"] - 1 or ts > r.get("removed", float("inf")) + 1:
+                        continue          # this order was not resting when the print happened
                     if side == "bid":
                         through, at = p < o.ys_price - 1e-9, abs(p - o.ys_price) < 1e-9
                     else:
@@ -91,10 +108,12 @@ class PaperBroker:
                     qty -= f
                     r["filled"] += f
                     self._apply(cid, o, f)
-                    events.append((t["timestamp"], cid, o.ys_side, f))
+                    events.append((ts, cid, o.ys_side, f))
         self.resting = {k: r for k, r in self.resting.items() if r["o"].size - r["filled"] > 1e-9}
-        cutoff = time.time() - 3 * 3600
-        self.seen = {k: v for k, v in self.seen.items() if v > cutoff}
+        # prune dedupe memory only below every order that could still be filled (no replays of old prints)
+        live_orders = list(self.resting.values()) + self.recent
+        floor = min((r["placed"] for r in live_orders), default=time.time()) - 60
+        self.seen = {k: v for k, v in self.seen.items() if v >= floor}
         self.fills += events
         return events
 

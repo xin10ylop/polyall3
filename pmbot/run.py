@@ -15,13 +15,14 @@ from .jev import ToxicityCache, SPENT
 class Universe:
     """Background refresher: the (slow) market selection never blocks the quoting loop."""
 
-    def __init__(self, cfg, tox, log):
-        self.cfg, self.tox, self.log = cfg, tox, log
+    def __init__(self, cfg, tox, log, own=None):
+        self.cfg, self.tox, self.log, self.own = cfg, tox, log, own
         self.lock, self.markets, self.version, self.error = threading.Lock(), [], 0, None
+        self.incumbents = set()          # markets quoted in the last cycle (set by the main loop)
 
     def refresh_once(self):
         try:
-            m = build_candidates(self.cfg, self.tox, self.log)
+            m = build_candidates(self.cfg, self.tox, self.log, own=self.own, incumbents=set(self.incumbents))
             with self.lock:
                 self.markets, self.version = m, self.version + 1
             self.log(f"universe v{self.version}: {len(m)} markets; jev+llm ${SPENT['usd']:.4f}")
@@ -71,7 +72,8 @@ def main():
         from .paper import PaperBroker
         broker = PaperBroker(log)
     tox = ToxicityCache(os.path.join(a.out, "jev_toxicity.json")) if cfg["use_jev"] else None
-    uni = Universe(cfg, tox, log)
+    own = broker.own_orders if a.mode == "live" else None   # our quotes are not competition for our own share
+    uni = Universe(cfg, tox, log, own)
     uni.refresh_once()
     threading.Thread(target=uni.loop, daemon=True).start()
 
@@ -84,19 +86,22 @@ def main():
                              "no": m["tokens"][1]["token_id"], "neg_risk": bool(m.get("neg_risk")), "v": 4.5,
                              "min_size": 5.0, "rate": 0.0, "tick": float(m.get("minimum_tick_size") or 0.01),
                              "end": m.get("end_date_iso")}
-    mids_hist, last_mid, cooldown, side_block, fill_seen = {}, {}, {}, {}, {}
+    mids_hist, last_mid, cooldown, side_block, fill_seen, relaxed = {}, {}, {}, {}, {}, set()
     rew = {"cons": 0.0, "cent": 0.0}
     day_est, cur_day, pending = 0.0, dt.datetime.utcnow().date(), []
     state_f = os.path.join(a.out, f"state_{a.mode}_{int(cfg['capital_usd'])}.json")
     try:   # survive restarts: today's running reward estimate and days awaiting reconciliation
         stt = json.load(open(state_f))
+        pending = [(dt.date.fromisoformat(d), e, n) for d, e, n in stt.get("pending", [])]
         if stt.get("day") == cur_day.isoformat():
             day_est = float(stt.get("day_est", 0.0))
-        pending = [(dt.date.fromisoformat(d), e, n) for d, e, n in stt.get("pending", [])]
+        elif stt.get("day") and float(stt.get("day_est", 0.0)) > 0:   # down across midnight: reconcile that day too
+            pending.append((dt.date.fromisoformat(stt["day"]), float(stt["day_est"]), 0))
     except Exception:
         pass
     last_score_t = 0.0
     peak_eq, start, last_t, last_eq_t, eq = None, time.time(), None, 0.0, None
+    last_fill_t, breaches = 0.0, 0
     try:
         while time.time() - start < a.hours * 3600:
             t0 = time.time()
@@ -116,6 +121,7 @@ def main():
                 else:
                     ev = broker.poll_fills(cfgs, in_u)
                 for (_, cid, ys_side, qty) in [(e[0], e[1], e[2], e[-1]) for e in ev]:
+                    last_fill_t = t0
                     side_block[(cid, ys_side)] = t0 + cfg["fill_guard_sec"]
                     fill_seen[(cid, ys_side)] = t0
                     log(f"FILL {ys_side} {qty:.1f} | {cfgs.get(cid, {}).get('q', cid)[:60]}")
@@ -128,6 +134,9 @@ def main():
                     c = cfgs[cid]
                     if cid not in in_u:          # unwind-only market: relax reward constraints so it can always exit
                         c = cfgs[cid] = dict(c, min_size=MIN_ORDER, v=max(c["v"], 10.0), rate=0.0)
+                    if (cid not in in_u) != (cid in relaxed):   # config switched: the adjusted-mid definition changed
+                        mids_hist.pop(cid, None)
+                        (relaxed.add if cid not in in_u else relaxed.discard)(cid)
                     st = scoring.book_state(bk.get(c["yes"]), c["min_size"], c["v"], exclude=broker.own_orders(c))
                     if not st:
                         continue
@@ -168,6 +177,13 @@ def main():
                     if a.mode == "live" and (broker.inv_stale or not broker.hb_ok):
                         orders = [o for o in orders if o.side == "SELL"]   # never add exposure blind
                     desired[cid] = orders
+                if a.mode == "live" and broker.open_orders and t0 - last_score_t > 1800:
+                    # fast pilot signal, taken on the fresh order snapshot (before this cycle's cancels/posts)
+                    snap = broker.scoring_snapshot()
+                    logf.write(json.dumps({"ts": int(t0), "scoring_snapshot": snap}) + "\n"); logf.flush()
+                    log(f"scoring snapshot: {str(snap)[:300]}")
+                    last_score_t = t0
+                uni.incumbents = {cid for cid, ol in desired.items() if ol and cid in in_u}
                 # 5) execute
                 if a.mode == "live":
                     failed = broker.sync(desired, cfgs)
@@ -209,23 +225,28 @@ def main():
                     if n < 2:
                         still.append((d, est, n))
                 pending = still
-                json.dump({"day": cur_day.isoformat(), "day_est": day_est,
-                           "pending": [(d.isoformat(), e, n) for d, e, n in pending]}, open(state_f, "w"))
-                if a.mode == "live" and t0 - last_score_t > 1800:   # fast signal: are we actually being credited?
-                    snap = broker.scoring_snapshot()
-                    logf.write(json.dumps({"ts": int(t0), "scoring_snapshot": snap}) + "\n"); logf.flush()
-                    log(f"scoring snapshot: {str(snap)[:300]}")
-                    last_score_t = t0
+                with open(state_f + ".tmp", "w") as fh:           # atomic: a crash mid-write keeps the old state
+                    json.dump({"day": cur_day.isoformat(), "day_est": day_est,
+                               "pending": [(d.isoformat(), e, n) for d, e, n in pending]}, fh)
+                os.replace(state_f + ".tmp", state_f)
                 # 7) trading equity (excludes estimated rewards) + drawdown stop
                 if a.mode == "paper":
                     eq = broker.trading_equity(last_mid)
                 elif t0 - last_eq_t > 60:
                     eq, last_eq_t = broker.trading_equity(last_mid), t0
-                if eq is not None:
+                # A fill moves cash at once but positions only after the data-api indexes it (30-90 s): skip samples
+                # near a fill, and stop only if the drawdown persists over several consecutive samples.
+                new_sample = a.mode == "paper" or t0 == last_eq_t
+                if eq is not None and new_sample and t0 - last_fill_t > cfg["fill_quiet_sec"]:
                     peak_eq = eq if peak_eq is None else max(peak_eq, eq)
                     if peak_eq - eq > cfg["max_drawdown_frac"] * cfg["capital_usd"]:
-                        log(f"max drawdown hit (peak {peak_eq:.2f} -> {eq:.2f}) -> stopping")
-                        break
+                        breaches += 1
+                        log(f"drawdown sample {breaches}/{cfg['drawdown_samples']} (peak {peak_eq:.2f} -> {eq:.2f})")
+                        if breaches >= cfg["drawdown_samples"]:
+                            log(f"max drawdown hit (peak {peak_eq:.2f} -> {eq:.2f}) -> stopping")
+                            break
+                    else:
+                        breaches = 0
                 rec = {"ts": int(t0), "hrs": round((t0 - start) / 3600, 3), "n_quoted": sum(1 for v in desired.values() if v),
                        "rate_cons_usd_day": round(rate_c, 2), "rew_cons": round(rew["cons"], 4), "rew_cent": round(rew["cent"], 4),
                        "trading_equity": None if eq is None else round(eq, 4), "avail": round(avail, 2),

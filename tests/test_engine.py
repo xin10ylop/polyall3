@@ -74,3 +74,12 @@ def test_tick_0001_rounding():
     st = st_from([(0.955, 100)], [(0.962, 100)], tick=0.001)
     b, a = quote_prices(st, mk(tick=0.001), "join")
     assert abs(b * 1000 - round(b * 1000)) < 1e-6 and abs(a * 1000 - round(a * 1000)) < 1e-6
+
+
+def test_m1_band_stepping_never_crosses_raw_book():
+    # audit #3 example: thin 0.52 ask below a size-adjusted mid of ~0.57 -> our bid must stay below 0.52
+    for v in (2.0, 3.5, 4.5):
+        st = st_from([(0.39, 500)], [(0.52, 5), (0.75, 500)], min_size=20, v=v)
+        b, a = quote_prices(st, mk(v=v), "join")
+        assert b is None or b <= 0.52 - 0.01 + 1e-9
+        assert a is None or a >= 0.39 + 0.01 - 1e-9

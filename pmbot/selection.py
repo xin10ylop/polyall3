@@ -11,8 +11,10 @@ def _f(x, default=0.0):
         return default
 
 
-def build_candidates(cfg, tox_cache=None, log=print):
-    """Rewarded markets that pass static filters, the reward-ROI screen and the Jev -> LLM toxicity cascade."""
+def build_candidates(cfg, tox_cache=None, log=print, own=None, incumbents=()):
+    """Rewarded markets that pass static filters, the reward-ROI screen and the Jev -> LLM toxicity cascade.
+    own(c) returns our resting orders in market c (excluded from the book, so our own quotes are not counted as
+    competition); markets in `incumbents` get a ranking bonus so a 30-min refresh does not churn them out."""
     rx = re.compile(cfg["exclude_regex"], re.I)
     rm = [r for r in api.rewarded_markets()
           if _f(r.get("total_daily_rate") or r.get("native_daily_rate")) >= cfg["min_pool_usd_day"]]
@@ -49,7 +51,7 @@ def build_candidates(cfg, tox_cache=None, log=print):
     out = []
     lo, hi = cfg["mid_range"]
     for c in cands:
-        st = scoring.book_state(bk.get(c["yes"]), c["min_size"], c["v"])
+        st = scoring.book_state(bk.get(c["yes"]), c["min_size"], c["v"], exclude=own(c) if own else None)
         if not st or not (lo <= st["mid"] <= hi):
             continue
         c["tick"] = st["tick"]
@@ -62,7 +64,7 @@ def build_candidates(cfg, tox_cache=None, log=print):
         if cap <= 0:
             continue
         c["est_roi"] = c["rate"] * sh / cap
-        c["mid"] = st["mid"]
+        c["mid"], c["cap"] = st["mid"], cap
         if c["est_roi"] >= cfg["min_est_roi_day"]:
             out.append(c)
     out.sort(key=lambda x: -x["est_roi"])
@@ -80,13 +82,13 @@ def build_candidates(cfg, tox_cache=None, log=print):
         c["usd24"], c["rng24"] = usd24, rng24
         if usd24 > cfg["max_trades_24h_usd"] or rng24 > cfg["max_range_24h"]:
             continue
-        cap = 2 * c["min_size"] * max(0.05, min(c["mid"], 1 - c["mid"]))
-        c["adverse_usd_day"] = cfg["adverse_rate"] * cfg["fill_share"] * min(usd24, 2 * c["min_size"])
-        c["est_roi"] -= c["adverse_usd_day"] / max(cap, 1e-9)
+        c["adverse_usd_day"] = adverse_usd_day(c, cfg, c["cap"])
+        c["est_roi"] -= c["adverse_usd_day"] / max(c["cap"], 1e-9)
         if c["est_roi"] >= cfg["min_est_roi_day"]:
             kept_a.append(c)
     log(f"activity filter: {len(kept_a)}/{len(top)} quiet enough")
-    out = sorted(kept_a, key=lambda x: -x["est_roi"])
+    inc = set(incumbents)
+    out = sorted(kept_a, key=lambda x: -x["est_roi"] * (cfg["incumbent_bonus"] if x["cid"] in inc else 1.0))
     if cfg["use_jev"] and tox_cache is not None:
         kept, reviews = [], 0
         for c in out[: cfg["max_markets"] * 3]:
@@ -108,6 +110,12 @@ def build_candidates(cfg, tox_cache=None, log=print):
         log(f"toxicity cascade: {len(kept)}/{min(len(out), cfg['max_markets'] * 3)} pass")
         out = kept
     return out[: cfg["max_markets"]]
+
+
+def adverse_usd_day(c, cfg, notional):
+    """Expected fill loss per day ($): adverse_rate x the $ we expect to be filled, which is our share of the
+    market's 24h taker $ but never more than the collateral our quotes put at risk (both in $)."""
+    return cfg["adverse_rate"] * min(cfg["fill_share"] * c.get("usd24", 0.0), notional)
 
 
 def _floor(p, t):
@@ -132,12 +140,18 @@ def quote_prices(st, c, mode):
         bid, ask = bid + t, ask - t
     bid = min(_floor(bid, t), _floor(mid - t, t), _floor(st["ba"] - t, t))   # never cross the raw best ask
     ask = max(_ceil(ask, t), _ceil(mid + t, t), _ceil(st["bb"] + t, t))      # never cross the raw best bid
-    while mid - bid >= band - 1e-9 and bid + t <= mid - t + 1e-9:
+    bid_cap = min(mid - t, st["ba"] - t)       # stepping into the band must never cross the raw best ask
+    ask_floor = max(mid + t, st["bb"] + t)     # ... nor the raw best bid
+    while mid - bid >= band - 1e-9 and bid + t <= bid_cap + 1e-9:
         bid = round(bid + t, 6)
-    while ask - mid >= band - 1e-9 and ask - t >= mid + t - 1e-9:
+    while ask - mid >= band - 1e-9 and ask - t >= ask_floor - 1e-9:
         ask = round(ask - t, 6)
-    bid = bid if (0 < bid < 1 and 0 <= (mid - bid) * 100 < v) else None
-    ask = ask if (0 < ask < 1 and 0 <= (ask - mid) * 100 < v) else None
+    if bid > st["ba"] - t + 1e-9:
+        bid = None
+    if ask is not None and ask < st["bb"] + t - 1e-9:
+        ask = None
+    bid = bid if (bid is not None and 0 < bid < 1 and 0 <= (mid - bid) * 100 < v) else None
+    ask = ask if (ask is not None and 0 < ask < 1 and 0 <= (ask - mid) * 100 < v) else None
     return bid, ask
 
 
@@ -164,7 +178,9 @@ def allocate(cands, cfg, states, available_usd):
                 continue
             sh0 = scoring.our_share(st, c["v"], c["min_size"], [("bid", bid, s0), ("ask", ask, s0)])[1] if s0 else 0.0
             sh1 = scoring.our_share(st, c["v"], c["min_size"], [("bid", bid, s0 + chunk), ("ask", ask, s0 + chunk)])[1]
-            gain = c["rate"] * (sh1 - sh0) / cost
+            unit = bid + (1 - ask)            # expected fill losses grow with the size at risk
+            d_adv = adverse_usd_day(c, cfg, (s0 + chunk) * unit) - adverse_usd_day(c, cfg, s0 * unit)
+            gain = (c["rate"] * (sh1 - sh0) - d_adv) / cost
             if gain > best_gain:
                 best, best_gain, best_cost, best_chunk = c, gain, cost, chunk
         if best is None or best_gain < cfg["min_est_roi_day"]:

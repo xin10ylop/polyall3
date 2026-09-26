@@ -54,6 +54,7 @@ class FakeClient:
 def mk():
     b = LiveBroker.__new__(LiveBroker)
     b.cfg, b.log, b.client, b.user = dict(CFG), (lambda *a: None), FakeClient(), ME
+    b.client.creds = types.SimpleNamespace(api_key="KEY")
     b.open_orders, b.inv, b.inv_stale, b.fills = [], {}, False, []
     b.seen_trades, b.last_trade_ts, b.allowed_tokens, b._last_hb_ok = {}, time.time() - 300, set(), time.time()
     b._cash, b._cash_t, b._hb_id = 100.0, time.time(), ""
@@ -64,7 +65,8 @@ def oo(i, tok, side, p, sz, m=0):
     return {"id": i, "asset_id": tok, "side": side, "price": str(p), "original_size": str(sz), "size_matched": str(m)}
 
 
-def test_n1_equity_not_double_counting_reserved_collateral():
+def test_n1_equity_not_double_counting_reserved_collateral(monkeypatch):
+    monkeypatch.setattr("pmbot.live.api.positions", lambda u: [])
     b = mk()
     b.client.oo = [oo("a", "Y", "BUY", 0.49, 100), oo("b", "N", "BUY", 0.49, 100)]
     b.refresh_open(CFGS)
@@ -131,3 +133,68 @@ def test_scoring_snapshot_reports_share_and_scoring_orders():
     snap = b.scoring_snapshot()
     assert snap["reward_percentages"] == {"c": 100.0}
     assert snap["orders_scoring"] == 2 and snap["orders_total"] == 2
+
+
+def test_m2_leg_matched_by_owner_and_derived_from_taker_fields():
+    b = mk()
+    logs = []
+    b.log = logs.append
+    now = str(int(time.time()))
+    b.client.trades = [
+        # maker leg without maker_address/side/asset_id: matched by API-key owner, same outcome -> opposite side
+        {"id": "t1", "status": "MATCHED", "match_time": now, "trader_side": "MAKER", "asset_id": "Y", "side": "SELL",
+         "outcome": "Yes", "maker_orders": [{"owner": "KEY", "matched_amount": "20", "price": "0.49", "outcome": "Yes"}]},
+        # other outcome (mint): same side on the complement token -> BUY N -> ask
+        {"id": "t2", "status": "MATCHED", "match_time": now, "trader_side": "MAKER", "asset_id": "Y", "side": "BUY",
+         "outcome": "Yes", "maker_orders": [{"owner": "KEY", "matched_amount": "15", "price": "0.49", "outcome": "No"}]},
+        # a MAKER row with no leg of ours is flagged, not silently dropped
+        {"id": "t3", "status": "MATCHED", "match_time": now, "trader_side": "MAKER", "asset_id": "Y", "side": "BUY",
+         "maker_orders": [{"owner": "OTHER", "matched_amount": "5", "price": "0.49"}]},
+    ]
+    ev = b.refresh_open(CFGS)
+    assert [(e[2], e[3]) for e in ev] == [("bid", 20.0), ("ask", 15.0)]
+    assert any("WARNING" in m for m in logs)
+
+
+def test_m5_old_fill_not_re_emitted_after_a_long_lull():
+    b = mk()
+    old = time.time() - 25 * 3600                       # last (only) fill was 25 h ago
+    b.last_trade_ts = old
+    b.client.trades = [{"id": "t1", "status": "MATCHED", "match_time": str(int(old)), "trader_side": "TAKER",
+                        "maker_orders": [{"maker_address": ME, "asset_id": "Y", "side": "BUY", "matched_amount": "20",
+                                          "price": "0.49"}]}]
+    first = b.refresh_open(CFGS)
+    assert len(first) == 1
+    for _ in range(3):
+        assert b.refresh_open(CFGS) == []
+
+
+def test_m4_redeemable_winner_stays_in_equity(monkeypatch):
+    b = mk()
+    pos = [{"conditionId": "c", "outcomeIndex": 0, "size": 40, "currentValue": 38.8, "redeemable": False}]
+    monkeypatch.setattr("pmbot.live.api.positions", lambda u: pos)
+    e1 = b.trading_equity({"c": 0.97})
+    pos[0].update(redeemable=True, currentValue=40.0)
+    e2 = b.trading_equity({"c": 0.97})
+    assert abs(e1 - 138.8) < 1e-9 and abs(e2 - 140.0) < 1e-9
+
+
+def test_m3_equity_reads_positions_and_cash_together(monkeypatch):
+    b = mk()
+    state = {"pos": [{"conditionId": "c", "outcomeIndex": 0, "size": 40, "currentValue": 20.8}]}
+    monkeypatch.setattr("pmbot.live.api.positions", lambda u: state["pos"])
+    b.client.balance = 80.0
+    e1 = b.trading_equity({"c": 0.52})
+    b.inv = {"c": __import__("pmbot.engine", fromlist=["Inv"]).Inv(yes=40)}   # stale cycle-start inventory
+    state["pos"], b.client.balance = [], 100.8          # SELL 40 @ 0.52 lands between cycle start and equity read
+    e2 = b.trading_equity({"c": 0.52})
+    assert abs(e1 - 100.8) < 1e-9 and abs(e2 - 100.8) < 1e-9     # no fake spike
+
+
+def test_l1_already_gone_cancel_is_not_a_failure():
+    b = mk()
+    b.client.oo = [oo("a", "Y", "BUY", 0.49, 50), oo("b", "N", "BUY", 0.49, 50)]
+    b.refresh_open(CFGS)
+    b.client.cancel_resp = {"canceled": [], "not_canceled": {"a": "order not found or already canceled",
+                                                             "b": "order can't be found - already canceled"}}
+    assert "c" not in b.sync({"c": []}, CFGS)

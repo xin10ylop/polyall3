@@ -100,6 +100,8 @@ def activity_24h(condition_id):
     if t is None:
         return None
     cut = time.time() - 86400
+    if len(t) >= 500 and min(x.get("timestamp", 0) for x in t) > cut:
+        return float("inf"), 1.0      # page truncated inside 24h: more than 500 prints -> treat as active
     t = [x for x in t if x.get("timestamp", 0) > cut]
     usd = sum(float(x["size"]) * float(x["price"]) for x in t)
     ps = [float(x["price"]) if x.get("outcomeIndex", 0) == 0 else 1 - float(x["price"]) for x in t]

@@ -18,6 +18,7 @@ CFG = {
     "max_range_24h": 0.10,            # ...or whose traded price ranged more than this in 24h
     "adverse_rate": 0.05,             # expected loss per $ filled (real farmers: 3-5%)
     "fill_share": 0.5,                # assume we absorb this share of a quiet market's 24h taker $ (we'd be top of book)
+    "incumbent_bonus": 1.25,          # ranking bonus for pools we already quote (avoids churn that resets scoring time)
     # --- Jev toxicity gate ---
     "use_jev": os.environ.get("PMBOT_USE_JEV", "0") == "1",   # off by default: in every test the gate cost far more
                                                                # reward than it saved in fill losses (REPORT §2.5)
@@ -36,6 +37,9 @@ CFG = {
     "fill_guard_sec": 180,            # after a fill, stop quoting that side of that market for this long
     "max_drawdown_frac": 0.15,        # stop the bot if mark-to-market equity falls this far below its peak
     "cycle_seconds": 20,
-    "watchdog_sec": 30,               # live: heartbeats stop (exchange cancels all orders) if no healthy cycle for this long
+    "watchdog_sec": 50,               # live: heartbeats stop (exchange cancels all orders) if no healthy cycle for this long
+                                      # (2 x cycle + 10: one failed cycle does not wipe the book)
+    "fill_quiet_sec": 120,            # drawdown check paused this long after a fill (positions API indexing lag)
+    "drawdown_samples": 3,            # drawdown must persist over this many consecutive equity samples
     "universe_refresh_min": 30,
 }

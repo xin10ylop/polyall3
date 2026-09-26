@@ -10,8 +10,10 @@ Safety design
   exchange cancels every order (worst case ~watchdog_sec + 15 s). Heartbeat-id desyncs (HTTP 400 carrying the expected
   id) are recovered; a broken chain is restarted; after a lapse a heartbeat is sent before any new order is posted.
 * Fills come from the exchange's own trade records for our maker orders (GET /data/trades?maker_address=...), not from
-  inferring vanished orders (which would confuse exchange-side cancels with fills). Inventory comes from the positions
-  API and keeps its last known value if that call fails.
+  inferring vanished orders (which would confuse exchange-side cancels with fills). A maker leg is ours if its
+  maker_address is our funder or its owner is our API key; missing token/side fields are derived from the taker
+  side. A MAKER row that yields no leg is logged as a warning, and one raw page is logged at startup to check the
+  row shape. Inventory comes from the positions API and keeps its last known value if that call fails.
 Use a dedicated Polymarket account: the bot manages (and cancels) every open order on it.
 Env: PM_PRIVATE_KEY, PM_FUNDER, PM_SIGNATURE_TYPE (0=EOA, 1=email/Magic proxy, 2=browser-wallet Safe).
 """
@@ -52,7 +54,14 @@ class LiveBroker:
         self.allowed_tokens, self._last_hb_ok = set(), 0.0
         self._cash, self._cash_t = cash, time.time()
         self._update_allowance(None)
-        self.inv, self.inv_stale, self.fills = {}, True, []
+        self._check_allowance()
+        self.inv, self.inv_stale, self.fills, self.redeemable_usd = {}, True, [], 0.0
+        try:   # pilot self-check: log the real trade-row shape once (fill detection depends on it)
+            from py_clob_client_v2 import TradeParams
+            rows = self.client.get_trades(TradeParams(maker_address=self.user, after=int(time.time()) - 30 * 86400))
+            log(f"trade-row sample ({len(rows or [])} rows in 30 d): {str((rows or [None])[0])[:1500]}")
+        except Exception as e:
+            log(f"trade-row sample failed: {e}")
         self.last_ok, self.hb_ok, self._hb_id, self._stop = 0.0, True, "", False
         threading.Thread(target=self._heartbeat, daemon=True).start()
 
@@ -129,6 +138,7 @@ class LiveBroker:
             self.log(f"get_trades error: {e}")
             return []
         events, me = [], self.user.lower()
+        key = getattr(getattr(self.client, "creds", None), "api_key", None)
         for t in trades or []:
             tid = t.get("id")
             if not tid or tid in self.seen_trades or "FAIL" in str(t.get("status", "")).upper():
@@ -136,19 +146,25 @@ class LiveBroker:
             ts = _ts(t.get("match_time") or t.get("matched_at")) or time.time()
             self.seen_trades[tid] = ts
             self.last_trade_ts = max(self.last_trade_ts, ts)
-            legs = [mo for mo in (t.get("maker_orders") or []) if str(mo.get("maker_address", "")).lower() == me]
+            legs = [_maker_leg(mo, t, tok) for mo in (t.get("maker_orders") or [])
+                    if str(mo.get("maker_address", "")).lower() == me or (key and mo.get("owner") == key)]
             if not legs and str(t.get("maker_address", "")).lower() == me and t.get("trader_side") == "TAKER":
-                legs = [{"asset_id": t.get("asset_id") or t.get("token_id"), "side": t.get("side"),
-                         "matched_amount": t.get("size"), "price": t.get("price")}]
-            for mo in legs:
-                token = mo.get("asset_id") or mo.get("token_id")
+                legs = [_maker_leg({"asset_id": t.get("asset_id") or t.get("token_id"), "side": t.get("side"),
+                                    "matched_amount": t.get("size"), "price": t.get("price")}, t, tok)]
+            if not legs and t.get("trader_side") == "MAKER":
+                self.log(f"WARNING: MAKER trade row yielded no leg of ours (fill may be missed): {str(t)[:600]}")
+            for token, side, qty in legs:
                 if token not in tok:
                     continue
                 cid, is_yes = tok[token]
-                buy = str(mo.get("side", "")).upper() == "BUY"
+                buy = side == "BUY"
                 ys_side = "bid" if (is_yes and buy) or (not is_yes and not buy) else "ask"
-                events.append((int(ts), cid, ys_side, float(mo.get("matched_amount") or 0)))
-        for k in [k for k, v in self.seen_trades.items() if time.time() - v > 86400]:
+                events.append((int(ts), cid, ys_side, qty))
+                if buy:
+                    self.allowed_tokens.discard(token)   # refresh the conditional allowance before selling it
+        # Forget ids only well below the query window (after = last_trade_ts - 120): an id that can still be returned
+        # must stay remembered, or a fill would be re-emitted every cycle after a long lull.
+        for k in [k for k, v in self.seen_trades.items() if v < self.last_trade_ts - 600]:
             self.seen_trades.pop(k, None)
         self.fills += events
         return events
@@ -197,8 +213,9 @@ class LiveBroker:
                 r = self.client.cancel_orders([o["id"] for o in chunk])
                 nc = (r or {}).get("not_canceled") if isinstance(r, dict) else None
                 for oid, why in (nc.items() if isinstance(nc, dict) else []):
-                    if "match" in str(why).lower():
-                        continue          # already filled: not a failure; the fill arrives via the trades poll
+                    w = str(why).lower()
+                    if any(s in w for s in ("match", "not found", "cancel", "not exist", "does not")):
+                        continue          # already filled or already gone: not a failure (fills come via trades)
                     o = next((x for x in chunk if x["id"] == oid), None)
                     if o:
                         failed_cids.add(tok2cid.get(o["asset_id"]))
@@ -258,6 +275,20 @@ class LiveBroker:
         except Exception as e:
             self.log(f"update_balance_allowance error: {e}")
 
+    def _check_allowance(self):
+        """Missing on-chain approvals would make every order fail; say so loudly at startup."""
+        from py_clob_client_v2 import BalanceAllowanceParams, AssetType
+        try:
+            r = self.client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+            al = r.get("allowances") if isinstance(r, dict) else None
+            if isinstance(al, dict) and al and all(float(v or 0) <= 0 for v in al.values()):
+                self.log(f"WARNING: collateral allowances are all zero ({al}); approve the exchange contracts first "
+                         "(any trade in the Polymarket UI does this) or every BUY will be rejected")
+            elif al is None:
+                self.log(f"allowance check: no 'allowances' field in {str(r)[:200]}")
+        except Exception as e:
+            self.log(f"allowance check failed: {e}")
+
     def cancel_all(self):
         try:
             self.client.cancel_all()
@@ -273,6 +304,7 @@ class LiveBroker:
         self._pos = pos
         by_token = {p["asset"]: (float(p.get("size") or 0), float(p.get("initialValue") or 0))
                     for p in pos if not p.get("redeemable")}   # resolved positions: redeem manually in the UI
+        self.redeemable_usd = sum(float(p.get("currentValue") or 0) for p in pos if p.get("redeemable"))
         for cid, c in cfgs.items():
             y, n = by_token.get(c["yes"], (0.0, 0.0)), by_token.get(c["no"], (0.0, 0.0))
             self.inv[cid] = Inv(yes=y[0], no=n[0], cost=y[1] + n[1])
@@ -308,17 +340,24 @@ class LiveBroker:
         return self._cash
 
     def trading_equity(self, mids):
-        """collateral balance (already includes collateral reserved by our open BUYs) + positions at mid."""
+        """Collateral balance (already includes collateral reserved by our open BUYs) + every position.
+        Positions and cash are read back to back so a fill between the two reads cannot fake a gain or a loss
+        (residual data-api lag is handled by the caller's post-fill quiet period). Resolved, not yet redeemed
+        positions count at their redemption value; our markets at mid; anything else at its current price."""
+        pos = api.positions(self.user)
         cash = self.cash_balance()
-        if cash is None:
+        if cash is None or pos is None:
             return None
         self._cash, self._cash_t = cash, time.time()
-        pos = 0.0
-        for cid, inv in self.inv.items():
-            m = mids.get(cid)
-            if m is not None:
-                pos += inv.yes * m + inv.no * (1 - m)
-        return cash + pos
+        v = 0.0
+        for p in pos:
+            size = float(p.get("size") or 0)
+            m = mids.get(p.get("conditionId"))
+            if p.get("redeemable") or m is None:
+                v += float(p.get("currentValue") or 0)
+            else:
+                v += size * (m if int(p.get("outcomeIndex") or 0) == 0 else 1 - m)
+        return cash + v
 
     def scoring_snapshot(self):
         """Fast pilot signal: Polymarket's own view of our reward share per market, and whether our orders score."""
@@ -350,6 +389,26 @@ class LiveBroker:
         self._stop = True
         self.cancel_all()
         self.log("cancelled all orders")
+
+
+def _maker_leg(mo, t, tok):
+    """(token, side, qty) of one maker leg. Maker legs may omit asset_id/side; derive them from the taker fields:
+    a maker on the same outcome takes the opposite side of the same token; on the other outcome (mint/merge) it has
+    the same side on the complement token."""
+    qty = float(mo.get("matched_amount") or mo.get("size") or 0)
+    t_tok, t_side = t.get("asset_id") or t.get("token_id"), str(t.get("side", "")).upper()
+    opp = {"BUY": "SELL", "SELL": "BUY"}.get(t_side, "")
+    token, side = mo.get("asset_id") or mo.get("token_id"), str(mo.get("side") or "").upper()
+    same = mo.get("outcome") is None or t.get("outcome") is None or mo.get("outcome") == t.get("outcome")
+    if not token:
+        if same:
+            token = t_tok
+        else:
+            cid_yes = tok.get(t_tok)
+            token = next((k for k, v in tok.items() if cid_yes and v[0] == cid_yes[0] and k != t_tok), None)
+    if side not in ("BUY", "SELL"):
+        side = opp if (token == t_tok) else t_side
+    return token, side, qty
 
 
 def _ts(x):
