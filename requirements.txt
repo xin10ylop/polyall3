@@ -1,0 +1,5 @@
+requests>=2.31
+numpy>=1.26
+pandas>=2.0
+# live trading only:
+py-clob-client-v2==1.2.0
