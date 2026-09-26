@@ -1,15 +1,19 @@
-"""Compare on-chain sponsored-reward payouts per market with the per-minute books from sponsored_recorder.py.
+"""Per-market test on sponsored pools: earned fraction (on-chain) vs fraction of minutes with a scoring quote.
 
-Usage: python sponsored_check.py YYYY-MM-DD   (the UTC day whose rewards were paid at ~00:20 UTC the next day)
-Keyed payouts: sponsor contract event 0xed9899d2 (topic1 = conditionId, topic2 = recipient, data = amount).
-Prediction per pool: sponsored rate x (minutes with a scoring quote / minutes recorded). A pool paid to a single
-wallet with a single in-band quote structure is the lone-quoter case.
+Usage: python sponsored_check.py YYYY-MM-DD   (the UTC day; refunds for it are sent at ~00:20 UTC the next day)
+Sponsor contract 0xdd8db71c...a29e8b (verified ABI on Sourcify):
+  SponsorRefunded(bytes32 marketId, address sponsor, uint256 amount)  topic0 0xed9899d2...  unearned part, per market
+  DistributedRewards(address user, uint256 amount)                    topic0 0x0be93415...  maker payouts, NO market id
+  Sponsored(bytes32 marketId, address sponsor, uint256 amount, uint32 start, uint32 end, uint256 ratePerMinute)
+Earned(pool, day) = sponsored daily rate - refund. Prediction: rate x (minutes with a scoring quote / minutes
+recorded). If pools whose recorded in-band book is a single maker are earned in proportion to their scoring
+minutes, lone quoters are being paid.
 """
 import sys, json, requests, datetime as dt, collections
 
 RPC = "https://polygon-bor-rpc.publicnode.com"
 SPONSOR = "0xdd8db71ce3be8d71ff148b2163d64da181a29e8b"
-KEYED = "0xed9899d2f5991ab401db3fd79f595fad984d6d1ab33d32552b733b9df116b1ae"
+REFUND = "0xed9899d2f5991ab401db3fd79f595fad984d6d1ab33d32552b733b9df116b1ae"   # SponsorRefunded
 
 
 def rpc(m, p):
@@ -34,12 +38,12 @@ def block_at(ts):
 day = dt.date.fromisoformat(sys.argv[1])
 t_pay = int(dt.datetime.combine(day + dt.timedelta(days=1), dt.time(), dt.timezone.utc).timestamp())
 b0, b1 = block_at(t_pay), block_at(t_pay + 2 * 3600)
-paid = collections.defaultdict(list)
+refund = collections.defaultdict(list)
 b = b0
 while b < b1:
     e = min(b1, b + 1000)
-    for l in rpc("eth_getLogs", [{"fromBlock": hex(b), "toBlock": hex(e), "address": SPONSOR, "topics": [KEYED]}]):
-        paid[l["topics"][1]].append(("0x" + l["topics"][2][-40:], int(l["data"], 16) / 1e6))
+    for l in rpc("eth_getLogs", [{"fromBlock": hex(b), "toBlock": hex(e), "address": SPONSOR, "topics": [REFUND]}]):
+        refund[l["topics"][1]].append(("0x" + l["topics"][2][-40:], int(l["data"], 16) / 1e6))
     b = e + 1
 t_day0 = t_pay - 86400
 mins = collections.defaultdict(lambda: [0, 0, 0, 0.0])      # recorded, scoring, lone-like scoring, rate
@@ -57,11 +61,12 @@ for line in open('live/sponsored_books.jsonl'):
             m[1] += 1
             if shape and shape[0] <= 1 and shape[2] <= 1:
                 m[2] += 1
-print(f"{day}: {n_snap} per-minute snapshots; {len(paid)} markets with keyed payouts")
-print("paid  recipients  rate   pred(rate x scoring-minutes share)  lone-like share  cid")
-for c in sorted(set(paid) | {c for c, m in mins.items() if m[1]}, key=lambda c: -sum(a for _, a in paid.get(c, []))):
-    m = mins.get(c, [0, 0, 0, 0.0])
-    p = sum(a for _, a in paid.get(c, []))
-    pred = m[3] * m[1] / m[0] if m[0] else None
-    print(f"{p:7.3f}  {len(paid.get(c, [])):3d}  {m[3]:7.3f}  {pred if pred is None else round(pred, 3)!s:>8}  "
-          f"{(m[2] / m[1]) if m[1] else 0:5.2f}  {c[:18]}")
+print(f"{day}: {n_snap} per-minute snapshots; {len(refund)} markets with sponsor refunds")
+print("rate    refund  earned_frac  pred_frac(scoring minutes)  lone-like share of scoring minutes  cid")
+for c in sorted(mins, key=lambda c: -mins[c][3]):
+    m = mins[c]
+    if not m[0] or m[3] <= 0:
+        continue
+    ref = sum(a for _, a in refund.get(c, []))
+    earned = max(0.0, 1 - ref / m[3])
+    print(f"{m[3]:7.3f} {ref:7.3f}  {earned:5.2f}  {m[1] / m[0]:5.2f}  {(m[2] / m[1]) if m[1] else 0:5.2f}  {c[:18]}")

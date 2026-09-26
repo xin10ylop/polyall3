@@ -1,9 +1,9 @@
 """Per-minute books of every sponsored reward pool, for a direct public test of lone-quoter payouts.
 
-Sponsored pools are scored like native pools, but the sponsor contract (0xdd8db71c...a29e8b) pays each market
-separately, logging (conditionId, recipient, amount) on-chain at ~00:20 UTC (see sponsored_check.py). With per-minute
-books we can predict each pool's payout (rate x share of minutes with a scoring quote) and, where a single wallet is
-paid, test whether a lone quoter receives the full per-minute pool.
+Sponsored pools are scored like native pools. The sponsor contract (0xdd8db71c...a29e8b) refunds the unearned part
+of each pool per market on-chain (SponsorRefunded, ~00:20 UTC), so each pool's earned fraction is public. With
+per-minute books we can compare it with the fraction of minutes that had a scoring quote, and check whether pools
+whose only quoter is a single maker are earned (i.e. paid out) for those minutes (see sponsored_check.py).
 Output: live/sponsored_books.jsonl  (one line per minute: {ts, pools: {cid: [rate, v, min_size, mid, q_min, shape]}})
 """
 import sys, json, time, traceback
