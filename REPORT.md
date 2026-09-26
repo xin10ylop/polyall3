@@ -84,17 +84,17 @@ Measured on Saturday 2026-09-26 from 17:55 UTC, first over 2.25 h (28 snapshots)
   * For the bot, this means shares will fall below 100% over time. The universe refresh moves capital to pools that
     are still empty, since new ones appear every day. A realistic long-run share is below the formula's 100%, and
     this was not measured.
-* **The original 2.25-h window** (the figures below):
-* At any single moment, $13.3k–27.9k/day of non-weather pools (median $20.7k) had no competing liquidity inside the
-  band.
-* **302 pools ($8.3k/day) stayed uncontested in every snapshot.** Of the pools uncontested at the start, 68% were
-  still uncontested 1.25 h later, while new ones appeared. Polymarket's own `market_competitiveness` for them is 0.
-* Their 24 h activity: median 1 taker trade and ~$1 traded (p75: 2 trades / $26; p90: 8 / $120).
-* **209 pools ($5.7k/day) are quiet**: ≤3 trades and <3¢ price range in 24 h.
-* **189 pools ($5.1k/day) pass the bot's own filters**: end date >72 h, mid 0.10–0.90, ≤$1k traded and ≤10¢ range in
-  24 h, no weather. Min size is 20 shares at the median, 40 at p90. Collateral to cover all of them is roughly $2–4k.
-* Pool sizes are small: $10–65/day (median ≈$25). Topics include AI model release dates and API prices
-  (insider-prone), elections, awards, crypto/finance, geopolitics and sports.
+* **The original 2.25-h window** (17:55–20:10 UTC):
+  * At any single moment, $13.3k–27.9k/day of non-weather pools (median $20.7k) had no competing liquidity inside the
+    band.
+  * **302 pools ($8.3k/day) stayed uncontested in every snapshot.** Of the pools uncontested at the start, 68% were
+    still uncontested 1.25 h later, while new ones appeared. Polymarket's own `market_competitiveness` for them is 0.
+  * Their 24 h activity: median 1 taker trade and ~$1 traded (p75: 2 trades / $26; p90: 8 / $120).
+  * **209 pools ($5.7k/day) are quiet**: ≤3 trades and <3¢ price range in 24 h.
+  * **189 pools ($5.1k/day) pass the bot's own filters**: end date >72 h, mid 0.10–0.90, ≤$1k traded and ≤10¢ range in
+    24 h, no weather. Min size is 20 shares at the median, 40 at p90. Collateral to cover all of them is roughly $2–4k.
+  * Pool sizes are small: $10–65/day (median ≈$25). Topics include AI model release dates and API prices
+    (insider-prone), elections, awards, crypto/finance, geopolitics and sports.
 * Why would farmers leave these pools alone? Possible reasons:
   1. Most are new (hours to a few days old) and farmers have not arrived yet. This is supported by the start-date and
      arrival data above.
