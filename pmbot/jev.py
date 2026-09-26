@@ -77,18 +77,64 @@ class ToxicityCache:
         st = {"question": question, "rules": (description or "")[:900], "end_date": end_date,
               "now": dt.datetime.utcnow().isoformat(timespec="minutes") + "Z"}
         a = decide(st, QUESTIONS)
-        if a is None:
-            return e  # keep stale score if the API is unavailable
-        e = {"realtime": a["realtime"]["noul"], "reveal_soon": a["reveal_soon"]["noul"],
-             "news_speed": a["news_speed"]["score"], "insider": a["insider"]["noul"], "ts": time.time(), "q": question}
+        try:
+            e = {"realtime": float(a["realtime"]["noul"]), "reveal_soon": float(a["reveal_soon"]["noul"]),
+                 "news_speed": float(a["news_speed"]["score"]), "insider": float(a["insider"]["noul"]),
+                 "ts": time.time(), "q": question}
+        except Exception:
+            return e  # API unavailable or unexpected shape: keep the stale score (None -> treated as unsafe)
         with _LOCK:
             self.d[cid] = e
         return e
+
+
+CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+LLM_PROMPT = """You screen Polymarket markets for a market-making bot that rests small two-sided quotes to earn liquidity
+rewards. The bot loses money when informed traders hit its quotes right before the price moves. Read the market and
+answer strictly as JSON with keys: realtime (probability 0-1 that the outcome tracks a live, frequently-updated public
+number such as counts, prices, rankings, polls), reveal_soon (probability 0-1 that decisive information arrives within
+72 hours of `now`), news_speed (0=rarely/weeks, 1=every few days, 2=daily, 3=hourly/real-time), insider (probability 0-1
+that identifiable insiders could know the result early), reasoning (<=40 words). Market:
+"""
+
+
+def llm_review(question, description, end_date, model, tries=2):
+    """Escalation step of the Jev cascade: a frontier LLM re-scores a market Jev found borderline."""
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key or not model:
+        return None
+    now = dt.datetime.utcnow().isoformat(timespec="minutes") + "Z"
+    body = {"model": model, "max_tokens": 400, "temperature": 0,
+            "messages": [{"role": "user", "content": LLM_PROMPT + json.dumps(
+                {"question": question, "rules": (description or "")[:3000], "end_date": end_date, "now": now})}]}
+    for i in range(tries):
+        try:
+            r = requests.post(CHAT_URL, headers={"Authorization": f"Bearer {key}", "X-Title": "pmbot"}, json=body,
+                              timeout=90).json()
+            txt = r["choices"][0]["message"]["content"]
+            d = json.loads(txt[txt.index("{"): txt.rindex("}") + 1])
+            with _LOCK:
+                SPENT["usd"] += float((r.get("usage") or {}).get("cost") or 0)
+                SPENT["calls"] += 1
+            return {k: float(d[k]) for k in ("realtime", "reveal_soon", "news_speed", "insider")} | {
+                "reasoning": str(d.get("reasoning", ""))[:300]}
+        except Exception:
+            time.sleep(2 + i)
+    return None
+
+
+def borderline(tox, cfg, margin=0.15):
+    if tox is None:
+        return False
+    return (abs(tox["realtime"] - cfg["max_realtime"]) < margin or abs(tox["reveal_soon"] - cfg["max_reveal_soon"]) < margin
+            or abs(tox["news_speed"] - cfg["max_news_speed"]) < 2 * margin)
 
 
 def is_safe(tox, cfg):
     """Toxicity gate. Missing score => unsafe when a key is configured (fail closed), safe otherwise (no Jev)."""
     if tox is None:
         return not os.environ.get("OPENROUTER_API_KEY")
+    if tox.get("llm"):  # the LLM's verdict overrides Jev on escalated (borderline) markets
+        tox = tox["llm"]
     return (tox["realtime"] <= cfg["max_realtime"] and tox["reveal_soon"] <= cfg["max_reveal_soon"]
             and tox["news_speed"] <= cfg["max_news_speed"])

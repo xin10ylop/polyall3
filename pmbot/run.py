@@ -1,14 +1,42 @@
-"""Main loop (identical logic for paper and live).
+"""Main loop (identical decision logic for paper and live).
 
-  python -m pmbot.run --mode paper            # forward test on live books + real trade prints
-  python -m pmbot.run --mode live             # real orders (needs PM_PRIVATE_KEY etc., see README)
+  python -m pmbot.run --mode paper --capital 100      # forward test: live books + real trade prints, simulated fills
+  python -m pmbot.run --mode live  --capital 100      # real orders (see README: eligibility, wallet, env vars)
 """
-import argparse, json, os, sys, time, traceback, datetime as dt
+import argparse, json, os, signal, sys, time, threading, traceback, datetime as dt
+from collections import deque
 from . import api, scoring
 from .config import CFG
-from .engine import target_orders, Inv
-from .select import build_candidates, allocate
+from .engine import target_orders, ys_orders, Inv, MIN_ORDER
+from .selection import build_candidates, allocate
 from .jev import ToxicityCache, SPENT
+
+
+class Universe:
+    """Background refresher: the (slow) market selection never blocks the quoting loop."""
+
+    def __init__(self, cfg, tox, log):
+        self.cfg, self.tox, self.log = cfg, tox, log
+        self.lock, self.markets, self.version, self.error = threading.Lock(), [], 0, None
+
+    def refresh_once(self):
+        try:
+            m = build_candidates(self.cfg, self.tox, self.log)
+            with self.lock:
+                self.markets, self.version = m, self.version + 1
+            self.log(f"universe v{self.version}: {len(m)} markets; jev+llm ${SPENT['usd']:.4f}")
+        except Exception as e:
+            self.error = e
+            self.log(f"universe refresh failed: {e}")
+
+    def loop(self):
+        while True:
+            time.sleep(self.cfg["universe_refresh_min"] * 60)
+            self.refresh_once()
+
+    def get(self):
+        with self.lock:
+            return list(self.markets), self.version
 
 
 def main():
@@ -28,121 +56,160 @@ def main():
     def log(msg):
         print(f"{dt.datetime.utcnow().isoformat(timespec='seconds')} {msg}", flush=True)
 
+    def _term(*_):
+        raise SystemExit("SIGTERM")
+    signal.signal(signal.SIGTERM, _term)
+
+    if cfg["use_jev"] and not os.environ.get("OPENROUTER_API_KEY"):
+        log("WARNING: OPENROUTER_API_KEY not set -> Jev/LLM toxicity gate is OFF")
     if a.mode == "live":
         from .live import LiveBroker
-        broker = LiveBroker(log)
+        broker = LiveBroker(cfg, log)
     else:
         from .paper import PaperBroker
         broker = PaperBroker(log)
     tox = ToxicityCache(os.path.join(a.out, "jev_toxicity.json")) if cfg["use_jev"] else None
+    uni = Universe(cfg, tox, log)
+    uni.refresh_once()
+    threading.Thread(target=uni.loop, daemon=True).start()
 
-    cfgs, universe = {}, []
-    last_u, last_t = 0.0, None
-    prev_mid, cooldown = {}, {}
-    rew_est = {"cons": 0.0, "cent": 0.0}
-    day_est, cur_day = {"cons": 0.0}, dt.datetime.utcnow().date()
-    peak_eq, start = None, time.time()
+    cfgs = {}
+    if a.mode == "live":   # never forget positions from earlier runs (unwind them)
+        for cid in broker.all_position_cids():
+            m = api.clob_market(cid)
+            if m and m.get("tokens") and len(m["tokens"]) == 2:
+                cfgs[cid] = {"cid": cid, "q": m.get("question", ""), "yes": m["tokens"][0]["token_id"],
+                             "no": m["tokens"][1]["token_id"], "neg_risk": bool(m.get("neg_risk")), "v": 4.5,
+                             "min_size": 5.0, "rate": 0.0, "tick": float(m.get("minimum_tick_size") or 0.01),
+                             "end": m.get("end_date_iso")}
+    mids_hist, last_mid, cooldown, side_block = {}, {}, {}, {}
+    rew = {"cons": 0.0, "cent": 0.0}
+    day_est, cur_day = 0.0, dt.datetime.utcnow().date()
+    peak_eq, start, last_t, last_eq_t, eq = None, time.time(), None, 0.0, None
     try:
         while time.time() - start < a.hours * 3600:
             t0 = time.time()
             try:
-                if t0 - last_u > cfg["universe_refresh_min"] * 60:
-                    universe = build_candidates(cfg, tox, log)
-                    for c in universe:
-                        cfgs[c["cid"]] = c
-                    last_u = t0
-                    log(f"universe: {len(universe)} markets; jev ${SPENT['usd']:.4f}")
-                # fills against orders that were resting since last cycle
-                broker.poll_fills(cfgs)
+                universe, _ = uni.get()
+                for c in universe:
+                    cfgs.setdefault(c["cid"], c).update(c)
+                in_u = {c["cid"] for c in universe}
+                # 1) order state + fills against what rested since last cycle
+                if a.mode == "live":
+                    ev = broker.refresh_open(cfgs)
+                    if ev is None:                           # cannot see our orders -> pull everything
+                        broker.cancel_all()
+                        time.sleep(5)
+                        continue
+                    broker.refresh_inventory(cfgs)
+                else:
+                    ev = broker.poll_fills(cfgs, in_u)
+                for (_, cid, ys_side, qty) in [(e[0], e[1], e[2], e[-1]) for e in ev]:
+                    side_block[(cid, ys_side)] = t0 + cfg["fill_guard_sec"]
+                    log(f"FILL {ys_side} {qty:.1f} | {cfgs.get(cid, {}).get('q', cid)[:60]}")
                 inv_cids = [cid for cid in cfgs if _has_inv(broker.inventory(cid))]
-                active = {c["cid"] for c in universe} | set(inv_cids)
-                bk = api.books([cfgs[cid]["yes"] for cid in active] + [cfgs[cid]["no"] for cid in active])
-                states, mids = {}, {}
+                active = in_u | set(inv_cids)
+                # 2) books (fresh, after our own-order snapshot)
+                bk = api.books([cfgs[cid]["yes"] for cid in active])
+                states = {}
                 for cid in active:
                     c = cfgs[cid]
-                    st = scoring.book_state(bk.get(c["yes"]), bk.get(c["no"]), c["min_size"], c["v"],
-                                            exclude=_own(broker, cid, c))
+                    st = scoring.book_state(bk.get(c["yes"]), c["min_size"], c["v"], exclude=broker.own_orders(c))
                     if not st:
                         continue
-                    pm = prev_mid.get(cid)
-                    if pm is not None and abs(st["mid"] - pm) * 100 >= cfg["jump_cents"]:
+                    c["tick"] = st["tick"]
+                    states[cid] = st
+                    last_mid[cid] = st["mid"]
+                    h = mids_hist.setdefault(cid, deque())
+                    h.append((t0, st["mid"]))
+                    while h and t0 - h[0][0] > cfg["jump_window_sec"]:
+                        h.popleft()
+                    lo, hi = min(x[1] for x in h), max(x[1] for x in h)
+                    if (hi - lo) * 100 >= cfg["jump_cents"] and cooldown.get(cid, 0) < t0:
                         cooldown[cid] = t0 + cfg["cooldown_min"] * 60
-                        log(f"jump {abs(st['mid'] - pm) * 100:.1f}c -> cooldown: {c['q'][:60]}")
-                    prev_mid[cid] = st["mid"]
-                    states[cid], mids[cid] = st, st["mid"]
+                        log(f"jump {(hi - lo) * 100:.1f}c/{cfg['jump_window_sec']}s -> cooldown: {c['q'][:60]}")
+                # 3) capital actually available = capital - collateral tied up in inventory
+                avail = cfg["capital_usd"] - broker.inventory_cost()
                 eligible = [c for c in universe if c["cid"] in states and cooldown.get(c["cid"], 0) < t0]
-                alloc = allocate(eligible, cfg, states)
-                desired, now_share_c, now_share_m = {}, 0.0, 0.0
+                alloc = allocate(eligible, cfg, states, avail)
+                # 4) desired orders
+                desired = {}
                 for cid in active:
                     c, st = cfgs[cid], states.get(cid)
-                    if st is None or cooldown.get(cid, 0) >= t0:
+                    if st is None:
                         desired[cid] = []
                         continue
                     inv = broker.inventory(cid)
+                    block = {s for s in ("bid", "ask") if side_block.get((cid, s), 0) > t0}
                     size = alloc.get(cid, 0.0)
-                    if size <= 0 and _has_inv(inv):          # unwind-only quoting for dropped markets
-                        size = max(abs(inv.yes - inv.no), 5.0)
-                        orders, bid, ask, bs, as_ = target_orders(c, st, inv, size, cfg)
-                        orders = [o for o in orders if o.side == "SELL"]
-                    else:
-                        orders, bid, ask, bs, as_ = target_orders(c, st, inv, size, cfg)
+                    unwind = size <= 0 or cooldown.get(cid, 0) >= t0
+                    orders = target_orders(c, st, inv, size, cfg, unwind_only=unwind, block=block)
+                    if a.mode == "live" and (broker.inv_stale or not broker.hb_ok):
+                        orders = [o for o in orders if o.side == "SELL"]   # never add exposure blind
                     desired[cid] = orders
-                    if orders:
-                        _, shc, shm = scoring.our_share(st, c["v"], bid, ask, bs, as_)
-                        now_share_c += c["rate"] * shc
-                        now_share_m += c["rate"] * shm
+                # 5) execute
                 if a.mode == "live":
                     broker.sync(desired, cfgs)
+                    broker.mark_ok()
                 else:
-                    broker.sync(desired)
+                    broker.sync(desired, states)
+                # 6) reward estimate from orders actually resting (live: exchange snapshot; paper: desired)
+                rate_c = rate_m = 0.0
+                for cid, st in states.items():
+                    c = cfgs[cid]
+                    if c.get("rate", 0) <= 0:
+                        continue
+                    ol = broker.resting_ys_orders(c) if a.mode == "live" else ys_orders(desired.get(cid, []))
+                    if not ol:
+                        continue
+                    _, shc, shm = scoring.our_share(st, c["v"], c["min_size"], ol)
+                    rate_c += c["rate"] * shc
+                    rate_m += c["rate"] * shm
                 el = 0.0 if last_t is None else min(120.0, t0 - last_t)
                 last_t = t0
-                rew_est["cons"] += now_share_c * el / 86400
-                rew_est["cent"] += now_share_m * el / 86400
-                day_est["cons"] += now_share_c * el / 86400
+                rew["cons"] += rate_c * el / 86400
+                rew["cent"] += rate_m * el / 86400
+                day_est += rate_c * el / 86400
                 today = dt.datetime.utcnow().date()
-                if today != cur_day:
-                    # daily reconciliation: model-estimated rewards vs what Polymarket actually paid (live only)
-                    rec_d = {"reconcile_day": cur_day.isoformat(), "estimated_rewards": round(day_est["cons"], 4)}
+                if today != cur_day:     # daily reconciliation: estimated vs actually paid (live)
+                    rec = {"reconcile_day": cur_day.isoformat(), "estimated_rewards": round(day_est, 4)}
                     if a.mode == "live":
-                        rec_d["actual_rewards"] = broker.rewards_for_day(cur_day.isoformat())
-                    logf.write(json.dumps(rec_d) + "\n"); logf.flush(); log(json.dumps(rec_d))
-                    day_est["cons"], cur_day = 0.0, today
-                eq = broker.equity(mids) if a.mode == "paper" else None
+                        rec["actual_rewards"] = broker.rewards_for_day(cur_day.isoformat())
+                    logf.write(json.dumps(rec) + "\n"); logf.flush(); log(json.dumps(rec))
+                    day_est, cur_day = 0.0, today
+                # 7) trading equity (excludes estimated rewards) + drawdown stop
+                if a.mode == "paper":
+                    eq = broker.trading_equity(last_mid)
+                elif t0 - last_eq_t > 60:
+                    eq, last_eq_t = broker.trading_equity(last_mid), t0
                 if eq is not None:
-                    tot = eq + rew_est["cons"]
-                    peak_eq = tot if peak_eq is None else max(peak_eq, tot)
-                    if peak_eq - tot > cfg["max_drawdown_frac"] * cfg["capital_usd"]:
-                        log("max drawdown hit -> stopping")
+                    peak_eq = eq if peak_eq is None else max(peak_eq, eq)
+                    if peak_eq - eq > cfg["max_drawdown_frac"] * cfg["capital_usd"]:
+                        log(f"max drawdown hit (peak {peak_eq:.2f} -> {eq:.2f}) -> stopping")
                         break
                 rec = {"ts": int(t0), "hrs": round((t0 - start) / 3600, 3), "n_quoted": sum(1 for v in desired.values() if v),
-                       "rate_cons_usd_day": round(now_share_c, 2), "rew_cons": round(rew_est["cons"], 4),
-                       "rew_cent": round(rew_est["cent"], 4), "trade_equity": None if eq is None else round(eq, 4),
+                       "rate_cons_usd_day": round(rate_c, 2), "rew_cons": round(rew["cons"], 4), "rew_cent": round(rew["cent"], 4),
+                       "trading_equity": None if eq is None else round(eq, 4), "avail": round(avail, 2),
                        "locked": round(sum(o.price * o.size for ol in desired.values() for o in ol if o.side == "BUY"), 2),
-                       "n_fills": len(getattr(broker, "fills", [])), "jev_usd": round(SPENT["usd"], 4)}
+                       "n_fills": len(broker.fills), "cooldowns": sum(1 for v in cooldown.values() if v > t0),
+                       "jev_llm_usd": round(SPENT["usd"], 4)}
                 logf.write(json.dumps(rec) + "\n"); logf.flush()
                 log(json.dumps(rec))
             except Exception:
                 traceback.print_exc()
+                if a.mode == "live":
+                    broker.cancel_all()            # any unexpected error -> no stale quotes left behind
             time.sleep(max(1.0, cfg["cycle_seconds"] - (time.time() - t0)))
     finally:
         if a.mode == "live":
             broker.shutdown()
-        if a.mode == "paper":
+        else:
             json.dump({"fills": broker.fills, "inv": {k: v.__dict__ for k, v in broker.inv.items()}, "cash": broker.cash},
                       open(os.path.join(a.out, tag + "_final.json"), "w"))
 
 
 def _has_inv(inv):
-    return inv.yes >= 1 or inv.no >= 1
-
-
-def _own(broker, cid, c):
-    """Live only: our resting orders (YES space) are removed from the observed book so we never compete with, or
-    step inside, ourselves. Paper orders are not in the real book, so nothing to remove."""
-    if hasattr(broker, "own_orders"):
-        return broker.own_orders(c)
-    return None
+    return inv.yes >= MIN_ORDER or inv.no >= MIN_ORDER
 
 
 if __name__ == "__main__":

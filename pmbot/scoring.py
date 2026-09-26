@@ -1,10 +1,11 @@
 """Polymarket liquidity-reward scoring (docs.polymarket.com/developers/market-makers/liquidity-rewards).
 
 S(v, s) = ((v - s) / v)^2 * size, with v = max spread (cents) and s = distance from the size-cutoff-adjusted
-midpoint (cents). Side 1 = YES bids + NO asks, side 2 = YES asks + NO bids (all expressed in YES-price space); the API's YES book
-already includes NO-token orders mirrored at 1-p, so only the YES book is read.
+midpoint (cents). Only orders of at least `rewards_min_size` shares count. Side 1 = YES bids + NO asks, side 2 = YES
+asks + NO bids, all in YES-price space; the API's YES book already contains NO-token orders mirrored at 1-p (the
+NO book is an exact mirror, verified on 70/70 markets), so only the YES book is read.
 Q_min = max(min(Q1, Q2), max(Q1, Q2) / 3) if 0.10 <= mid <= 0.90 else min(Q1, Q2).
-Rewards are sampled once a minute; a maker earns rate_per_day * (its Q_min / sum of all makers' Q_min).
+A maker earns rate_per_day * (its Q_min / sum of all makers' Q_min), sampled once a minute, paid daily.
 """
 
 
@@ -43,16 +44,26 @@ def q_min(q1, q2, mid):
     return min(q1, q2)
 
 
-def book_state(yes_book, no_book, min_size, v, exclude=None):
-    """Summarise a binary market's two books in YES-price space.
+def _subtract(lv, ours, descending):
+    d = {}
+    for p, s in lv:
+        k = round(p, 6)
+        d[k] = d.get(k, 0.0) + s
+    for p, s in ours:
+        k = round(p, 6)
+        if k in d:
+            d[k] = max(0.0, d[k] - s)
+    return sorted([(p, s) for p, s in d.items() if s > 1e-9], key=lambda x: x[0], reverse=descending)
 
-    exclude: optional {"bids": [(p, size)], "asks": [(p, size)]} of our own resting orders (YES-space) to remove
-    from competitor liquidity when running live.
+
+def book_state(yes_book, min_size, v, exclude=None):
+    """Summarise a binary market in YES-price space from the (unified) YES book.
+
+    exclude: {"bids": [(p, size)], "asks": [(p, size)]} of our own resting orders (live mode) so we never compete
+    with, or step inside, ourselves.
     """
-    if not yes_book or not no_book:
+    if not yes_book:
         return None
-    # The CLOB serves one unified book: the NO token's book is an exact mirror of the YES book (verified 40/40
-    # markets), so the YES book alone already contains every order placed on either token.
     bids, asks = levels(yes_book, "bids"), levels(yes_book, "asks")
     if exclude:
         bids = _subtract(bids, exclude.get("bids", []), descending=True)
@@ -60,38 +71,40 @@ def book_state(yes_book, no_book, min_size, v, exclude=None):
     if not bids or not asks:
         return None
     abb, aba = adjusted_best(bids, min_size), adjusted_best(asks, min_size)
-    if abb is None or aba is None:
+    if abb is None or aba is None or aba <= abb:
         return None
     mid = (abb + aba) / 2
+    try:
+        tick = float(yes_book.get("tick_size") or 0.01)
+    except Exception:
+        tick = 0.01
     return {
-        "bb": bids[0][0], "ba": asks[0][0], "mid": mid,
+        "bb": bids[0][0], "ba": asks[0][0], "mid": mid, "tick": tick,
         "q1": side_q(bids, mid, v, True), "q2": side_q(asks, mid, v, False),
-        "bids": bids[:10], "asks": asks[:10],
+        "bids": bids[:15], "asks": asks[:15],
     }
 
 
-def _subtract(lv, ours, descending):
-    d = {}
-    for p, s in lv:
-        d[round(p, 6)] = d.get(round(p, 6), 0) + s
-    for p, s in ours:
-        k = round(p, 6)
-        if k in d:
-            d[k] = max(0.0, d[k] - s)
-    out = [(p, s) for p, s in d.items() if s > 1e-9]
-    return sorted(out, key=lambda x: x[0], reverse=descending)
+def order_q(orders, mid, v, min_size):
+    """Our (Q1, Q2) from concrete YES-space orders [(ys_side, price, size)]; orders below min_size do not count."""
+    q1 = q2 = 0.0
+    for side, p, sz in orders:
+        if sz < min_size:
+            continue
+        if side == "bid":
+            q1 += side_q([(p, sz)], mid, v, True)
+        else:
+            q2 += side_q([(p, sz)], mid, v, False)
+    return q1, q2
 
 
-def our_share(st, v, bid, ask, size_bid, size_ask):
-    """Our Q_min and reward share (conservative: competitors credited with max(Q1, Q2); central: their Q_min)."""
-    mid = st["mid"]
-    sb = round((mid - bid) * 100, 6) if bid is not None else -1
-    sa = round((ask - mid) * 100, 6) if ask is not None else -1
-    o1 = s_score(v, sb) * size_bid if 0 <= sb < v and size_bid > 0 else 0.0
-    o2 = s_score(v, sa) * size_ask if 0 <= sa < v and size_ask > 0 else 0.0
-    ours = q_min(o1, o2, mid)
+def our_share(st, v, min_size, orders):
+    """(our Q_min, conservative share, central share). Conservative credits competitors with max(Q1, Q2), an upper
+    bound on their total Q_min; central credits them with Q_min of the aggregate book."""
+    o1, o2 = order_q(orders, st["mid"], v, min_size)
+    ours = q_min(o1, o2, st["mid"])
     if ours <= 0:
         return 0.0, 0.0, 0.0
     comp_cons = max(st["q1"], st["q2"])
-    comp_cent = q_min(st["q1"], st["q2"], mid)
+    comp_cent = q_min(st["q1"], st["q2"], st["mid"])
     return ours, ours / (ours + comp_cons), ours / (ours + comp_cent)
