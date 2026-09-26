@@ -7,7 +7,7 @@ Trading venue: **Polymarket only**. Weather markets excluded as required.
 
 | | |
 |---|---|
-| **Edge found** | **Liquidity-reward harvesting**: rest small two-sided post-only quotes inside the reward band of markets that pay Polymarket CLOB liquidity rewards, in markets a **Jev → Claude Opus cascade** judges low-toxicity. |
+| **Edge found** | **Liquidity-reward harvesting**: rest minimum-size, two-sided, post-only quotes inside the reward band of many thinly contested markets that pay Polymarket CLOB liquidity rewards. |
 | Why it is an edge | Polymarket pays ~$134k/day to makers. The pool is split by a published formula, so income is contractual rather than a forecasting bet. Many pools have little or no competition inside the band. |
 | Is it real? | Yes, on real wallets. Of 95 wallets active in thin rewarded markets that received rewards last week (no cherry-picking), **76 were net profitable after fill losses**. In aggregate: rewards $127.8k + rebates $21.1k − adverse selection $38.7k = **+$110.2k**. The median farmer made **≈1%/day on capital**; the top 10% made ≥4.4%/day; the best small accounts made 6–7%/day on $600–$1,500. |
 | Executable? | Yes. Orders are post-only limit orders (never pay taker fees), with a minimum size of 20 shares and no latency race. Quotes are refreshed every 20 s, and income depends on minutes-long resting time, not milliseconds. |
@@ -51,6 +51,16 @@ so reward farmers never rank on P&L leaderboards.
 | LongTry | ~$614 | $851 | $52 | −$621 | $40 | 6.6% | weather |
 | 0x2b27… | ~$975 | $279 | $23 | −$127 | $25 | 2.6% | weather |
 
+* **The closest real analogues to this bot (non-weather, long-dated markets, 20-share quotes = the reward minimum):**
+
+| wallet | capital | markets farmed | reward history | 30-day rewards+rebates | 30-day fill markout | **30-day net** |
+|---|---|---|---|---|---|---|
+| `0x1ef01de8…` | ~$1.1k | House/Senate races, Gemini release date, Prague mayor (~300 markets) | 41 straight days since Aug 15, $170/day → $1.1–1.6k/day | $16,930 | −$13,326 | **+$3,604 (≈$120/day)** |
+| `T22222222222` | ~$2.4k | midterm vote totals, GPU-price index, governor races, jobs data | 28 days, ramping to $400–700/day | $6,006 | −$2,949 | **+$3,057 (≈$102/day)** |
+
+  Both clear **$100/day net on $1–2.5k**, sustained over 30 days. Adverse selection took 50–79% of their rewards,
+  which is why this bot adds a toxicity cascade and fill guards. Caveat: open positions (many resolve in Nov 2026)
+  are marked at the current mid.
 * **Population (not cherry-picked)**: the 200 most active wallets in ~40 thin rewarded markets → 95 received rewards in the last 7 days. 76/95 net profitable; aggregate +$110.2k/week; median ≈1.16%/day, 75th pct 2.84%/day, 90th pct 4.44%/day on capital. Farmers keep ~70% of reward+rebate income after adverse selection.
 * Sign convention verified (40/40 maker fills: the user's row carries the user's own side).
 
@@ -63,23 +73,53 @@ band at any moment. Over 15 minutes, 429/488 uncontested pools stayed unconteste
 * When nobody quotes inside the band, a minimum-size order (20 shares ≈ $10–20 of collateral per side) earns **100%** of the pool. Right now ≈ $16.4k/day of non-weather pools have no competing liquidity inside the band.
 * The bot's allocator water-fills capital to the highest marginal reward per $, so $100 goes to ~5 uncontested pools; extra capital only helps once pools are contested.
 
-### 2.5 Where the risk is, and how the bot handles it
-Adverse selection: quotes get hit right before information moves the price. The simulator's largest loss (−$39.50, "#2 global Netflix show") came from a market whose ranking is visible in real time.
-* **Jev screen** (TypeSafe Jev via OpenRouter Decisions API, ~$0.00004/market): realtime-observable outcome? decisive info within 72 h? news frequency? insider risk?
-* **Claude Opus 5.5 confirmation** (cascade): every market Jev passes is re-read in full by Opus before quoting (≈$0.009/market, cached 24 h). Opus caught what Jev missed: FlixPatrol as a live proxy for Netflix rankings; Super Bowl headliners usually announced in September.
-* In the 3-hour simulation, markets passing Jev earned $52 in rewards with **+$15.7** fill P&L; markets Jev rejected earned $90 with **−$23.1** fill P&L, including all three largest losses.
-* Jump guard (mid moves ≥ 4¢ → pull quotes 60 min), no quoting within 72 h of a market's end, max inventory = 1 quote size, 35% max capital per market, post-only orders, exchange heartbeat dead-man switch, drawdown stop.
+### 2.5 Where the risk is: adverse selection, and what does (not) predict it
+Resting quotes get hit right before prices move. Measured on real farmers (`0x1ef0` + `T222`, 30 days, 46,489 fills
+across 9,001 markets, each fill marked to resolution or current mid):
+* Loss per $ filled is **≈3–5% everywhere**: 5.1% in the thinnest volume quartile, 2.8% in the busiest. But in
+  absolute terms it is small per market, **≈$1.6–2.5 per market per 30 days** at minimum size, while uncontested
+  pools pay $10–100/day. The binding constraint is reward share, not adverse selection, so breadth wins:
+  min-size quotes across many pools.
+* **Does the Jev → Claude toxicity screen predict losses? No.**
+  * Jev: markets it passed lost 4.41%/$ filled vs 4.16%/$ for markets it rejected. Spearman correlation of every
+    Jev score with loss per $ is between −0.01 and +0.05 (2,313 markets).
+  * Claude Opus 5.5, on the 30 worst vs 30 best markets: AUC 0.49 (p = 0.56).
+  * The 3-hour simulator had suggested otherwise (Jev-passed markets +$15.7, rejected −$23.1). That was
+    small-sample noise, and the simulator also read the cached trade feed (audit N6).
+  * **Decision:** the toxicity gate is **opt-in** (`PMBOT_USE_JEV=1`) rather than default. It removes ~40% of pools
+    (reward income) without measurably reducing losses. Opus still catches individual obvious hazards (e.g.
+    "headliners usually announced in September"), so it is kept as an optional sanity layer.
+* Controls that **do** bound losses mechanically:
+  * no quoting within 72 h of a market's end date;
+  * rolling 5-min jump guard (≥ 4¢ → unwind-only for 60 min);
+  * a 3-min block on a side after it fills;
+  * max inventory of 1× quote size, and at most 35% of capital per market;
+  * post-only orders;
+  * an exchange heartbeat watchdog;
+  * a 15% drawdown stop on trading equity.
 
 ## 3. Forward test (live books, real trade prints, paper fills)
 _Filled in at the end of the run — see §6._
 
-## 4. Jev usage summary
-1. Event matching for the sports recorder (Polymarket ↔ Pinnacle): catches women's/reserve-team mismatches (0.05 vs 0.98 on true matches), $0.00002/call.
-2. Toxicity screen for reward markets (above), 1,387 markets scored for $0.05.
-3. Cascade escalation to Claude Opus 5.5 for final confirmation.
+## 4. Jev + LLM: where they helped and where they did not
+| Use | Result |
+|---|---|
+| Event matching Polymarket ↔ Pinnacle (sports research) | **Useful.** Separates true matches (0.96–0.98) from women's/reserve-team traps (0.05). $0.00002/call, ~0.4 s. |
+| Toxicity screen for reward markets (Jev, 9,001 markets on real fills) | **No predictive power** for adverse selection (ρ ≤ 0.05). |
+| Escalation to Claude Opus 5.5 (60 extreme markets) | **No predictive power** (AUC 0.49); qualitative catches only. Opt-in. |
+| Claude (this research) | Strategy search, 10 hypothesis tests, bot design, audits, fixes. |
 
 ## 5. Independent audits
-_Filled in when the audits complete._
+| Audit | Scope | Result |
+|---|---|---|
+| Code audit #1 | whole bot vs py-clob-client-v2 source, docs, and live endpoints | Verified correct: client API usage, post-only (no taker path), YES/NO conversions, the scoring formula, mirrored books (30/30), no secret logging. Found 2 CRITICAL (geoblock check didn't check geoblock; heartbeat kept stale quotes alive during stalls), 7 HIGH, 10 MEDIUM. **All fixed**, with reproductions added as tests. |
+| Code audit #2 (verification) | the rewrite | Confirmed C1, C2, H1, H4, H5, H7, M1, M4, M5, M6, M10, L3, L6, L8 fixed. Found 3 new HIGH: equity double-counted reserved collateral; fill detection inferred fills from vanished orders; the paper feed was CDN-cached for up to 300 s, biasing paper P&L optimistic. **All fixed and tested** (18 tests). |
+| Farmer-profitability audit | independent re-derivation of the population result | _pending_ |
+| Leaderboard forensics | 3,102 wallets | See §1 rows 9–10. |
+
+Consequence of audit #2 (N6) for this report: the first simulator (`research/rw_sim.py`) and the first paper runs
+read the cached trade feed, so their **fill P&L is optimistic**. Only the corrected paper runs (§6) are used for the
+bot's own results. The real-wallet evidence (§2.2) does not depend on this feed.
 
 ## 6. Results of the forward test
 _Filled in at the end of the run._

@@ -1,8 +1,9 @@
 # polyall3 — Polymarket liquidity-reward harvester (Jev + Claude)
 
-A bot that earns **Polymarket's CLOB liquidity rewards** by resting small, two-sided, post-only quotes in markets whose
-reward pools are thinly contested. A **Jev → Claude Opus 5.5 cascade** filters out markets where resting quotes get
-picked off. It is the one edge that survived a day of testing everything else (see [REPORT.md](REPORT.md)).
+A bot that earns **Polymarket's CLOB liquidity rewards** by resting minimum-size, two-sided, post-only quotes across
+many markets whose reward pools are thinly contested. It is the one edge that survived a day of testing everything
+else (see [REPORT.md](REPORT.md)). An optional **Jev → Claude Opus 5.5** toxicity cascade is included, but on
+46k real fills it showed **no** power to predict adverse selection, so it is off by default.
 
 > **Honest summary.** This is a real, contractual edge. Polymarket pays ~$134k/day to makers by a published formula,
 > and real wallets farm it profitably: 76 of 95 active farmers were net positive last week, with a median of ~1%/day
@@ -16,12 +17,14 @@ picked off. It is the one edge that survived a day of testing everything else (s
 1. **Universe** (every 30 min, background thread): all markets paying liquidity rewards (`/rewards/markets/current`)
    → drop weather, crypto up/down, markets within 72 h of their end date, and mids outside 0.10–0.90 → compute our
    reward share with the exact scoring formula against the live book → keep the best reward-per-$ pools.
-2. **Toxicity cascade**:
+2. **Toxicity cascade (opt-in, `PMBOT_USE_JEV=1`)**:
    * **Jev** (TypeSafe System One via OpenRouter Decisions API, ~$0.00004/market) answers four typed questions. Does
      the outcome track a live public number? Is decisive information due within 72 h? How often does news arrive?
      Could insiders know early?
    * Markets Jev passes (or scores borderline) are re-read in full by **Claude Opus 5.5** (~$0.009/market, cached
      24 h), and the LLM's verdict decides. Failures fail closed.
+   * Measured on real farmers' fills, neither Jev nor Opus scores predicted losses (REPORT §2.5), so it is off by
+     default.
 3. **Allocation**: capital is water-filled to the highest marginal reward per $ locked. When nobody quotes inside a
    pool's band, a minimum-size quote earns the whole pool, which is why $100 is enough to start.
 4. **Quoting** (every 20 s): one post-only order per side, joining the best bid/ask but always on the correct side of

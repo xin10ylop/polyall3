@@ -13,7 +13,7 @@ CFG = {
     "exclude_regex": r"temperature|precipitation|rain|snow|hurricane|tornado|weather|°[CF]|inches of|Up or Down",
     "min_est_roi_day": 0.01,          # projected reward per $ locked per day (conservative share) to be eligible
     # --- Jev toxicity gate ---
-    "use_jev": True,
+    "use_jev": os.environ.get("PMBOT_USE_JEV", "0") == "1",   # opt-in: showed no measurable reduction in adverse selection (REPORT §2.5)
     "max_realtime": 0.5,
     "max_reveal_soon": 0.4,
     "max_news_speed": 1.5,            # 0=rarely .. 3=constantly
