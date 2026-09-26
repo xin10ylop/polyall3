@@ -45,6 +45,10 @@ class FakeClient:
         s.posted += posts
         return [{"success": True, "orderID": f"o{len(s.posted)}"} for _ in posts]
     def get_reward_percentages(s): return {"c": 100.0}
+    def get_total_earnings_for_user_for_day(s, d): return [{"date": d, "earnings": 3.5}]
+    def get_earnings_for_user_for_day(s, d):
+        return [{"condition_id": "c", "earnings": 2.0, "asset_rate": 1.0},
+                {"condition_id": "d", "earnings": [{"earnings": 1.5, "asset_rate": 1.0}]}]
     def are_orders_scoring(s, p): return {i: True for i in p.orderIds}
     def post_heartbeat(s, hid):
         s.hb += 1
@@ -206,3 +210,9 @@ def test_n4_real_cancel_failure_is_a_failure():
     b.refresh_open(CFGS)
     b.client.cancel_resp = {"canceled": [], "not_canceled": {"a": "failed to cancel order: context canceled"}}
     assert "c" in b.sync({"c": []}, CFGS)
+
+
+def test_rewards_for_day_per_market_breakdown():
+    b = mk()
+    r = b.rewards_for_day("2026-09-26")
+    assert r["by_market"] == {"c": 2.0, "d": 1.5} and "total" in r

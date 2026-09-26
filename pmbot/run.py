@@ -106,15 +106,16 @@ def main():
                              "end": m.get("end_date_iso")}
     mids_hist, last_mid, cooldown, side_block, fill_seen, relaxed = {}, {}, {}, {}, {}, set()
     rew = {"cons": 0.0, "cent": 0.0}
-    day_est, cur_day, pending = 0.0, dt.datetime.utcnow().date(), []
+    # per UTC day: estimated rewards in total and per market (the pilot compares both with Polymarket's payout)
+    day_est, day_by, cur_day, pending = 0.0, {}, dt.datetime.utcnow().date(), []
     state_f = os.path.join(a.out, f"state_{a.mode}_{int(cfg['capital_usd'])}.json")
     try:   # survive restarts: today's running reward estimate and days awaiting reconciliation
         stt = json.load(open(state_f))
-        pending = [(dt.date.fromisoformat(d), e, n) for d, e, n in stt.get("pending", [])]
+        pending = [(dt.date.fromisoformat(p[0]), p[1], p[2], p[3] if len(p) > 3 else {}) for p in stt.get("pending", [])]
         if stt.get("day") == cur_day.isoformat():
-            day_est = float(stt.get("day_est", 0.0))
+            day_est, day_by = float(stt.get("day_est", 0.0)), dict(stt.get("day_by", {}))
         elif stt.get("day") and float(stt.get("day_est", 0.0)) > 0:   # down across midnight: reconcile that day too
-            pending.append((dt.date.fromisoformat(stt["day"]), float(stt["day_est"]), 0))
+            pending.append((dt.date.fromisoformat(stt["day"]), float(stt["day_est"]), 0, dict(stt.get("day_by", {}))))
     except Exception:
         pass
     last_score_t = 0.0
@@ -225,6 +226,8 @@ def main():
                     _, shc, shm = scoring.our_share(st, c["v"], c["min_size"], ol)
                     rate_c += c["rate"] * shc
                     rate_m += c["rate"] * shm
+                    if last_t is not None:
+                        day_by[cid] = day_by.get(cid, 0.0) + c["rate"] * shc * min(120.0, t0 - last_t) / 86400
                 el = 0.0 if last_t is None else min(120.0, t0 - last_t)
                 last_t = t0
                 rew["cons"] += rate_c * el / 86400
@@ -232,24 +235,32 @@ def main():
                 day_est += rate_c * el / 86400
                 now_utc = dt.datetime.utcnow()
                 if now_utc.date() != cur_day:          # day rolled: remember yesterday's estimate
-                    pending.append((cur_day, day_est, 0))
-                    day_est, cur_day = 0.0, now_utc.date()
+                    pending.append((cur_day, day_est, 0, day_by))
+                    day_est, day_by, cur_day = 0.0, {}, now_utc.date()
                 # rewards are paid ~00:00 UTC but can post late: check at 01:30 and again at 06:00 UTC
                 mins = now_utc.hour * 60 + now_utc.minute
                 still = []
-                for d, est, n in pending:
+                for d, est, n, by in pending:
                     if (n == 0 and mins >= 90) or (n == 1 and mins >= 360):
                         rec = {"reconcile_day": d.isoformat(), "check": n + 1, "estimated_rewards": round(est, 4)}
                         if a.mode == "live":
-                            rec["actual_rewards"] = broker.rewards_for_day(d.isoformat())
-                        logf.write(json.dumps(rec) + "\n"); logf.flush(); log(json.dumps(rec))
+                            act = broker.rewards_for_day(d.isoformat())
+                            rec["actual_rewards"] = act
+                            # per market: estimated vs paid (A/E per pool; a pool quoted for part of the day tells
+                            # whether Polymarket normalises over the whole day as its docs say)
+                            got = act.get("by_market", {}) if isinstance(act, dict) else {}
+                            rec["per_market"] = {cid: {"est": round(e, 4), "paid": round(got.get(cid, 0.0), 4),
+                                                       "q": cfgs.get(cid, {}).get("q", "")[:60]}
+                                                 for cid, e in sorted(by.items(), key=lambda x: -x[1])}
+                            rec["paid_not_estimated"] = {k: v for k, v in got.items() if k not in by}
+                        logf.write(json.dumps(rec) + "\n"); logf.flush(); log(json.dumps(rec)[:2000])
                         n += 1
                     if n < 2:
-                        still.append((d, est, n))
+                        still.append((d, est, n, by))
                 pending = still
                 with open(state_f + ".tmp", "w") as fh:           # atomic: a crash mid-write keeps the old state
-                    json.dump({"day": cur_day.isoformat(), "day_est": day_est,
-                               "pending": [(d.isoformat(), e, n) for d, e, n in pending]}, fh)
+                    json.dump({"day": cur_day.isoformat(), "day_est": day_est, "day_by": day_by,
+                               "pending": [(d.isoformat(), e, n, by) for d, e, n, by in pending]}, fh)
                 os.replace(state_f + ".tmp", state_f)
                 # 7) trading equity (excludes estimated rewards) + drawdown stop (live: sampled after inventory)
                 if a.mode == "paper":

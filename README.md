@@ -63,7 +63,7 @@ set -a; source .env; set +a
 # Paper mode: live books + real (cache-busted) trade prints, queue-position fill model. No wallet needed.
 python -m pmbot.run --mode paper --capital 100 --out runs     # optional: --hours N
 
-python -m pytest -q tests       # 31 tests
+python -m pytest -q tests       # 41 tests
 ```
 
 Environment variables:
@@ -89,7 +89,8 @@ Environment variables:
      fill was not parsed.
    * `scoring_snapshot` every 30 min: Polymarket's own reward percentage per market, and how many of our orders are
      scoring. This is the fastest verdict on the payout question.
-   * `reconcile_day` at 01:30 and 06:00 UTC: actual vs estimated rewards.
+   * `reconcile_day` at 01:30 and 06:00 UTC: actual vs estimated rewards, in total and **per market**
+     (`per_market`: `est` vs `paid` for every pool we quoted; `paid_not_estimated`: payouts we did not expect).
    * Scale only per the decision rule in REPORT §7.
 
 ## What to expect (evidence-based, not a promise)
@@ -116,4 +117,4 @@ covers. Above that, the number of acceptable uncontested pools (≈189 / ≈$5.1
   * `jev.py` optional Jev + LLM cascade
   * `config.py` parameters
 * `research/`: study scripts behind REPORT.md (see `research/README.md`; evidence data is not committed)
-* `tests/`: 31 regression tests, including reproductions of the audit findings
+* `tests/`: 41 regression tests, including reproductions of the audit findings

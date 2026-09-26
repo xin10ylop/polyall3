@@ -383,11 +383,29 @@ class LiveBroker:
         return out
 
     def rewards_for_day(self, day):
-        """Actual liquidity rewards credited by Polymarket for a UTC day (paid at midnight UTC)."""
+        """Actual liquidity rewards credited by Polymarket for a UTC day (paid at midnight UTC): the total, and the
+        per-market breakdown (GET /rewards/user) keyed by condition id. Raw rows are kept for the record."""
+        out = {}
         try:
-            return self.client.get_total_earnings_for_user_for_day(day)
+            out["total"] = self.client.get_total_earnings_for_user_for_day(day)
         except Exception as e:
-            return {"error": str(e)}
+            out["total_error"] = str(e)[:200]
+        try:
+            rows = self.client.get_earnings_for_user_for_day(day) or []
+            by = {}
+            for x in rows:
+                cid = x.get("condition_id") or x.get("market")
+                ev = x.get("earnings") or 0
+                if isinstance(ev, list):        # /rewards/user/markets shape: [{asset_address, earnings, asset_rate}]
+                    e = sum(float(y.get("earnings") or 0) * float(y.get("asset_rate") or 1) for y in ev)
+                else:
+                    e = float(ev) * float(x.get("asset_rate") or 1)
+                if cid:
+                    by[cid] = by.get(cid, 0.0) + e
+            out["by_market"], out["raw_sample"] = by, rows[:3]
+        except Exception as e:
+            out["by_market_error"] = str(e)[:200]
+        return out
 
     def shutdown(self):
         self._stop = True

@@ -167,8 +167,11 @@ says. Only a live account can answer it.
    * **If our uncontested pools show ~100%, the payout thesis is very likely right.**
    * If our orders are not scoring, or our share is small, the thesis fails early.
 5. **Daily:** at 01:30 and again at 06:00 UTC, the log records
-   `{"reconcile_day": D, "estimated_rewards": E, "actual_rewards": A}`. If `A` is empty or 0, check the Polymarket UI
-   and your USDC.e balance (sponsored pools) before concluding anything.
+   `{"reconcile_day": D, "estimated_rewards": E, "actual_rewards": A, "per_market": {...}}`. `per_market` gives
+   the estimate and Polymarket's actual payout (`GET /rewards/user`) for every pool we quoted, so `A/E` is measured
+   pool by pool. Pools that rotated in or out during the day also show whether a partial-day lone quoter is paid for
+   the whole day, as the documented day-level normalisation implies (§2.4). If `A` is empty or 0, check the
+   Polymarket UI and your USDC.e balance (sponsored pools) before concluding anything.
 6. **Decision rule** (commit to it in advance; needs at least 3 full UTC days). `trading_equity` is CLOB cash plus
    positions, so pUSD reward payouts are already inside it. Net P&L = `equity − start equity`. Fill losses =
    `net P&L − cumulative A`.
