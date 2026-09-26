@@ -345,7 +345,7 @@ class LiveBroker:
     def trading_equity(self, mids):
         """Collateral balance (already includes collateral reserved by our open BUYs) + every position.
         Positions and cash are read back to back so a fill between the two reads cannot fake a gain or a loss
-        (residual data-api lag is handled by the caller's post-fill quiet period). Resolved, not yet redeemed
+        (residual data-api lag is absorbed by the caller's DrawdownGuard, which needs 3 consecutive samples). Resolved, not yet redeemed
         positions count at their redemption value; our markets at mid; anything else at its current price."""
         fresh = getattr(self, "_pos_t", 0) > time.time() - 10
         pos = self._pos if fresh else api.positions(self.user)   # the loop calls this right after refresh_inventory

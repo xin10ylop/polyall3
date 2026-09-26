@@ -4,24 +4,28 @@ A bot that rests minimum-size, two-sided, post-only quotes in **quiet, uncontest
 pools**. It is the only candidate edge that was not rejected after a day of testing ten strategy families (see
 [REPORT.md](REPORT.md)). **Its profitability at small capital is still unverified.**
 
-> **Honest summary (after seven independent audits: four of the code, one each of the farmer data, the report and
-> the payout evidence)**
-> * **Real:** Polymarket pays makers a daily reward per market by a published formula. It paid **$128.6k** for
->   2026-09-25, on-chain, to 2,238 wallets.
+> **Honest summary** (eight audit passes by separate agents: four of the code, two of the report, one each of the
+> farmer data and the payout evidence. The payout audit's sponsored-pool reading was wrong and has been withdrawn.)
+> * **Real:** Polymarket pays makers a daily reward per market by a published formula. It paid **$128.5k** for
+>   2026-09-25, on-chain, to ≈2,260 wallets.
 > * **Thin for typical farmers:** audited non-weather farmers net only ≈0.2–0.3%/day on capital at mid marks, and
 >   were negative at liquidation marks in the latest week. Fill losses eat 60–85% of rewards.
-> * **The bot's focus.** At any moment ≈$13–28k/day of non-weather pools have no quote at all. Over 3.6 h, 255 pools
->   (≈$6.8k/day) stayed empty, and 160 of them (≈$4.2k/day) pass the bot's filters. They trade about once a day. A
->   7-day replay puts fill losses there at ≈3–4% of rewards. Most are new pools; competitors arrive within hours to
->   days, and new empty pools keep appearing.
+> * **The bot's focus.** At any moment ≈$13–28k/day of non-weather pools have no scoring quote inside the reward band.
+>   Over 3.6 h, 255 pools (≈$6.8k/day) stayed empty, and 160 of them (≈$4.2k/day) pass the bot's filters. They trade
+>   about once a day. A 7-day replay puts fill losses there at ≈3–4% of rewards. Newer markets are over-represented,
+>   but 39% of these pools are markets over a week old. 27% of pools empty at 17:55 drew a lasting competitor within
+>   3.6 h, and new empty pools keep appearing.
 > * **Whether Polymarket pays a lone quoter that way is unverified.** It decides everything. Aggregate on-chain
->   payouts match the pools that have quotes, and pools are paid per minute scored. No public record isolates a
->   lone quoter yet; a per-market test on sponsored pools is set up (REPORT §2.4).
+>   payouts are consistent with the listed rates of pools that have quotes (a ~10–20% haircut cannot be excluded),
+>   and sponsored pools appear to be paid per minute scored. No public record isolates a lone quoter, so the $100
+>   pilot is the test. A sponsored-pool recorder checks per-minute accrual only.
 > * **Next step:** paper mode, then **live with $100 for at least 3 full UTC days**. Within the first hour the bot logs
 >   Polymarket's own reward percentage for our orders; each day it logs actual vs estimated payout **per market**.
 >   Scale only if they agree.
-> * **Not promised:** $100/day. The $100 formula estimate is ≈$215–265/day at a 100% share (≈$110–130/day at
->   50%). It holds only if lone quoters are paid. At the audited farmer rate, $100/day needs ≈$40k.
+> * **Not promised:** $100/day. The $100 formula estimate is ≈$200–300/day at a 100% share (≈$100–150/day at 50%),
+>   before fill losses. It holds only if lone quoters are paid. The long-run share is unmeasured: 27% of empty pools
+>   drew a lasting competitor within 3.6 h, so even 50% is not a floor. At the audited farmer rate, $100/day needs
+>   ≈$40k.
 
 ## How it works
 
@@ -51,8 +55,9 @@ pools**. It is the only candidate edge that was not rejected after a day of test
      the market goes unwind-only for 60 min.
    * After a fill, that side of that market is blocked for 3 min.
    * Max inventory is 1× quote size, and at most 35% of capital goes to one market.
-   * 15% drawdown stop on trading equity (estimated rewards are excluded). The drawdown must persist over 3
-     consecutive samples and is not checked within 2 min of a fill, because the positions API lags cash by 30–90 s.
+   * 15% drawdown stop on trading equity (estimated rewards are excluded). Both the peak and the drawdown must persist
+     over 3 consecutive equity samples, so a fill the positions API has not yet indexed cannot trip the stop or
+     inflate the peak. Fills do not pause the check.
    * **Heartbeat dead-man switch with watchdog:** the exchange cancels every order ≈15 s after the process dies, or
      ≈65 s after the loop stalls.
    * Any live-loop error triggers cancel-all.
@@ -104,9 +109,9 @@ Environment variables:
 | Typical non-weather reward farmer | 5–6 survivor wallets, 7–90 days (audited; data-API fills + Polymarket P&L series) | ≈0.2–0.3%/day at mid; −0.24%/day at liquidation marks in the latest week | ≈$35–50k |
 | Surviving maker farmers, all categories | 27 wallets, 30–90 days (audited) | ≈0.4–0.6%/day | ≈$17–25k |
 | Two hand-picked small non-weather farmers | 2 wallets, 30 days (unaudited, mid-marked, end-of-window capital) | ≈4–11%/day on reported capital; fills ate 49–79% of rewards | **not a planning basis** |
-| This bot, quiet uncontested pools | formula + live books + 7-day risk replay; **lone-quoter payout unverified** | formula: ≈240–290%/day of locked collateral at a 100% share, before fill losses and competitor arrival; real: unknown until the pilot | ≈$50–100 *only if* the pilot confirms the payout; the supply of empty pools (≈$4–7k/day) caps scale |
+| This bot, quiet uncontested pools | formula + live books + 7-day risk replay; **lone-quoter payout unverified** | formula: ≈240–290%/day of locked collateral at a 100% share, before fill losses and competitor arrival; real: unknown until the pilot | ≈$50–100 *only if* the pilot confirms the payout *and* the bot keeps finding empty pools as competitors arrive (unmeasured). The supply of empty pools (≈$4–7k/day) caps scale. |
 
-Paper "rewards" (e.g. ≈$215–265/day for $100 across 5 pools) are the formula applied to simulated quotes. They
+Paper "rewards" (e.g. ≈$200–300/day for $100 across 5 pools) are the formula applied to simulated quotes. They
 assume a 100% share and the unverified lone-quoter payout. They are not evidence of income. Below ~$2–4k, capital limits how many pools the bot
 covers. Above that, the number of acceptable uncontested pools (≈160–189 pools / ≈$4.2–5.1k/day in the measured windows) is the cap.
 
