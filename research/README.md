@@ -16,4 +16,7 @@ earlier outputs:
 | `farmer_markout.py`, `farmer_population.py` | real-farmer markouts (see the audit corrections in REPORT §2.2) |
 | `gate_validate.py`, `gate_market_volume.py`, `gate_opus_extremes.py`, `gate_uncontested.py`, `jev_tox.py` | toxicity-gate tests |
 | `pool_tracker.py`, `quiet_pools.py`, `quiet_risk_bt.py` | uncontested/quiet pool supply and the 7-day risk backtest |
-| `payout_check.py`, `payout_analyze.py`, `empty_pools.py` | on-chain daily reward totals vs pools with a scoring quote (aggregate payout check); why empty pools are empty |
+| `payout_check.py`, `payout_analyze.py`, `empty_pools.py`, `competitiveness_check.py` | on-chain daily reward totals vs pools with a scoring quote (aggregate payout check); why empty pools are empty; Polymarket's own per-market competitiveness |
+| `sponsored_recorder.py`, `sponsored_check.py` | per-minute books of sponsored pools vs on-chain `SponsorRefunded` (earned fraction per pool; tests per-minute accrual, cannot isolate lone quoters) |
+| `lone_maker_check.py` | native pools whose book looks like one maker: identify the maker from fills, compare its next-day on-chain reward with a lone quoter's expected payout |
+| `fwd_summary.py` | summary of paper forward-test logs (REPORT §6) |
