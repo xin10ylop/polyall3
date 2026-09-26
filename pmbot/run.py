@@ -84,7 +84,7 @@ def main():
                              "no": m["tokens"][1]["token_id"], "neg_risk": bool(m.get("neg_risk")), "v": 4.5,
                              "min_size": 5.0, "rate": 0.0, "tick": float(m.get("minimum_tick_size") or 0.01),
                              "end": m.get("end_date_iso")}
-    mids_hist, last_mid, cooldown, side_block = {}, {}, {}, {}
+    mids_hist, last_mid, cooldown, side_block, fill_seen = {}, {}, {}, {}, {}
     rew = {"cons": 0.0, "cent": 0.0}
     day_est, cur_day, pending = 0.0, dt.datetime.utcnow().date(), []
     peak_eq, start, last_t, last_eq_t, eq = None, time.time(), None, 0.0, None
@@ -108,6 +108,7 @@ def main():
                     ev = broker.poll_fills(cfgs, in_u)
                 for (_, cid, ys_side, qty) in [(e[0], e[1], e[2], e[-1]) for e in ev]:
                     side_block[(cid, ys_side)] = t0 + cfg["fill_guard_sec"]
+                    fill_seen[(cid, ys_side)] = t0
                     log(f"FILL {ys_side} {qty:.1f} | {cfgs.get(cid, {}).get('q', cid)[:60]}")
                 inv_cids = [cid for cid in cfgs if _has_inv(broker.inventory(cid))]
                 active = in_u | set(inv_cids)
@@ -124,12 +125,17 @@ def main():
                     c["tick"] = st["tick"]
                     states[cid] = st
                     last_mid[cid] = st["mid"]
+                    ltp = (bk.get(c["yes"]) or {}).get("last_trade_price")
                     h = mids_hist.setdefault(cid, deque())
-                    h.append((t0, st["mid"]))
+                    h.append((t0, st["mid"], ltp))
                     while h and t0 - h[0][0] > cfg["jump_window_sec"]:
                         h.popleft()
                     lo, hi = min(x[1] for x in h), max(x[1] for x in h)
-                    if (hi - lo) * 100 >= cfg["jump_cents"] and cooldown.get(cid, 0) < t0:
+                    # A mid move in a thin book with no trade is order flicker (we requote around the new mid anyway);
+                    # only a move accompanied by actual trading, or by our own fill, counts as information.
+                    traded = len({x[2] for x in h}) > 1 or any(k[0] == cid and v > t0 - cfg["jump_window_sec"]
+                                                                for k, v in fill_seen.items())
+                    if (hi - lo) * 100 >= cfg["jump_cents"] and traded and cooldown.get(cid, 0) < t0:
                         cooldown[cid] = t0 + cfg["cooldown_min"] * 60
                         log(f"jump {(hi - lo) * 100:.1f}c/{cfg['jump_window_sec']}s -> cooldown: {c['q'][:60]}")
                 # 3) capital actually available = capital - collateral tied up in inventory
