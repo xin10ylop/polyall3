@@ -84,7 +84,7 @@ def main():
                              "end": m.get("end_date_iso")}
     mids_hist, last_mid, cooldown, side_block = {}, {}, {}, {}
     rew = {"cons": 0.0, "cent": 0.0}
-    day_est, cur_day = 0.0, dt.datetime.utcnow().date()
+    day_est, cur_day, pending = 0.0, dt.datetime.utcnow().date(), []
     peak_eq, start, last_t, last_eq_t, eq = None, time.time(), None, 0.0, None
     try:
         while time.time() - start < a.hours * 3600:
@@ -114,6 +114,8 @@ def main():
                 states = {}
                 for cid in active:
                     c = cfgs[cid]
+                    if cid not in in_u:          # unwind-only market: relax reward constraints so it can always exit
+                        c = cfgs[cid] = dict(c, min_size=MIN_ORDER, v=max(c["v"], 10.0), rate=0.0)
                     st = scoring.book_state(bk.get(c["yes"]), c["min_size"], c["v"], exclude=broker.own_orders(c))
                     if not st:
                         continue
@@ -130,6 +132,8 @@ def main():
                         log(f"jump {(hi - lo) * 100:.1f}c/{cfg['jump_window_sec']}s -> cooldown: {c['q'][:60]}")
                 # 3) capital actually available = capital - collateral tied up in inventory
                 avail = cfg["capital_usd"] - broker.inventory_cost()
+                if a.mode == "live":
+                    avail = min(avail, broker.cash_cached())
                 eligible = [c for c in universe if c["cid"] in states and cooldown.get(c["cid"], 0) < t0]
                 alloc = allocate(eligible, cfg, states, avail)
                 # 4) desired orders
@@ -149,15 +153,16 @@ def main():
                     desired[cid] = orders
                 # 5) execute
                 if a.mode == "live":
-                    broker.sync(desired, cfgs)
-                    broker.mark_ok()
+                    failed = broker.sync(desired, cfgs)
+                    if not failed:
+                        broker.mark_ok()      # heartbeats continue only while cycles fully succeed
                 else:
                     broker.sync(desired, states)
                 # 6) reward estimate from orders actually resting (live: exchange snapshot; paper: desired)
                 rate_c = rate_m = 0.0
                 for cid, st in states.items():
                     c = cfgs[cid]
-                    if c.get("rate", 0) <= 0:
+                    if cid not in in_u or c.get("rate", 0) <= 0:
                         continue
                     ol = broker.resting_ys_orders(c) if a.mode == "live" else ys_orders(desired.get(cid, []))
                     if not ol:
@@ -170,13 +175,17 @@ def main():
                 rew["cons"] += rate_c * el / 86400
                 rew["cent"] += rate_m * el / 86400
                 day_est += rate_c * el / 86400
-                today = dt.datetime.utcnow().date()
-                if today != cur_day:     # daily reconciliation: estimated vs actually paid (live)
-                    rec = {"reconcile_day": cur_day.isoformat(), "estimated_rewards": round(day_est, 4)}
-                    if a.mode == "live":
-                        rec["actual_rewards"] = broker.rewards_for_day(cur_day.isoformat())
-                    logf.write(json.dumps(rec) + "\n"); logf.flush(); log(json.dumps(rec))
-                    day_est, cur_day = 0.0, today
+                now_utc = dt.datetime.utcnow()
+                if now_utc.date() != cur_day:          # day rolled: remember yesterday's estimate
+                    pending.append((cur_day, day_est))
+                    day_est, cur_day = 0.0, now_utc.date()
+                if pending and now_utc.hour * 60 + now_utc.minute >= 90:   # rewards are paid ~00:00 UTC; check 01:30
+                    for d, est in pending:
+                        rec = {"reconcile_day": d.isoformat(), "estimated_rewards": round(est, 4)}
+                        if a.mode == "live":
+                            rec["actual_rewards"] = broker.rewards_for_day(d.isoformat())
+                        logf.write(json.dumps(rec) + "\n"); logf.flush(); log(json.dumps(rec))
+                    pending.clear()
                 # 7) trading equity (excludes estimated rewards) + drawdown stop
                 if a.mode == "paper":
                     eq = broker.trading_equity(last_mid)

@@ -5,11 +5,13 @@ Safety design
   proxy/safe signature type is used without PM_FUNDER.
 * Post-only GTC orders only: an order that would cross is rejected by the exchange, so the bot never takes
   liquidity and never pays taker fees.
-* Dead-man switch with a watchdog: the heartbeat thread only heartbeats while the main loop has completed a healthy
-  sync within `watchdog_sec`. If the loop stalls, errors, or the process dies, heartbeats stop and the exchange cancels
-  every order within ~10-15 s. Heartbeat-id desyncs (HTTP 400 carrying the expected id) are recovered.
-* Fills are detected immediately from our own order state (orders that vanish without a cancel, or size_matched
-  increases); inventory itself comes from the positions API and keeps the last known value if that call fails.
+* Dead-man switch with a watchdog: the heartbeat thread only heartbeats while the main loop has completed a fully
+  successful sync within `watchdog_sec`. If the loop stalls, errors, or the process dies, heartbeats stop and the
+  exchange cancels every order (worst case ~watchdog_sec + 15 s). Heartbeat-id desyncs (HTTP 400 carrying the expected
+  id) are recovered; a broken chain is restarted; after a lapse a heartbeat is sent before any new order is posted.
+* Fills come from the exchange's own trade records for our maker orders (GET /data/trades?maker_address=...), not from
+  inferring vanished orders (which would confuse exchange-side cancels with fills). Inventory comes from the positions
+  API and keeps its last known value if that call fails.
 Use a dedicated Polymarket account: the bot manages (and cancels) every open order on it.
 Env: PM_PRIVATE_KEY, PM_FUNDER, PM_SIGNATURE_TYPE (0=EOA, 1=email/Magic proxy, 2=browser-wallet Safe).
 """
@@ -45,9 +47,11 @@ class LiveBroker:
         log(f"live broker ready: user={self.user[:10]}.. cash=${cash:.2f} geo={gb.get('country')}")
         if cash < cfg["capital_usd"]:
             log(f"WARNING: cash ${cash:.2f} < configured capital ${cfg['capital_usd']:.2f}; allocation uses the lower")
-        self.known = {}             # order_id -> {cid, ys_side, size, matched}
-        self.cancel_req = {}        # order_id -> time we asked to cancel
         self.open_orders = []
+        self.seen_trades, self.last_trade_ts = {}, time.time() - 300
+        self.allowed_tokens, self._last_hb_ok = set(), 0.0
+        self._cash, self._cash_t = cash, time.time()
+        self._update_allowance(None)
         self.inv, self.inv_stale, self.fills = {}, True, []
         self.last_ok, self.hb_ok, self._hb_id, self._stop = 0.0, True, "", False
         threading.Thread(target=self._heartbeat, daemon=True).start()
@@ -55,9 +59,6 @@ class LiveBroker:
     # ---------------- heartbeat + watchdog ----------------
     def mark_ok(self):
         self.last_ok = time.time()
-
-    def healthy(self):
-        return self.hb_ok and time.time() - self.last_ok < self.cfg["watchdog_sec"]
 
     def _heartbeat(self):
         from py_clob_client_v2.exceptions import PolyApiException
@@ -70,7 +71,7 @@ class LiveBroker:
                         r = self.client.post_heartbeat(self._hb_id)
                         if isinstance(r, dict) and r.get("heartbeat_id"):
                             self._hb_id = r["heartbeat_id"]
-                        fails = 0
+                        fails, self._last_hb_ok = 0, time.time()
                         break
                     except PolyApiException as e:
                         em = e.error_msg if isinstance(e.error_msg, dict) else {}
@@ -82,37 +83,73 @@ class LiveBroker:
                     except Exception:
                         fails += 1
                         break
+                if fails >= 5:
+                    self._hb_id = ""          # restart the heartbeat chain
                 self.hb_ok = fails < 3
             # else: main loop unhealthy -> deliberately skip; the exchange cancels all orders (dead-man switch)
             time.sleep(max(0.2, 3.0 - (time.time() - t0)))
 
     # ---------------- order state ----------------
+    def ensure_heartbeat(self):
+        """After a lapse the exchange may still cancel fresh orders; heartbeat synchronously before posting."""
+        if time.time() - self._last_hb_ok > 6:
+            try:
+                r = self.client.post_heartbeat(self._hb_id)
+            except Exception as e:
+                em = getattr(e, "error_msg", None)
+                hid = em.get("heartbeat_id") if isinstance(em, dict) else None
+                try:
+                    r = self.client.post_heartbeat(hid or "")
+                except Exception:
+                    return False
+            if isinstance(r, dict) and r.get("heartbeat_id"):
+                self._hb_id = r["heartbeat_id"]
+            self._last_hb_ok = time.time()
+        return True
+
     def refresh_open(self, cfgs):
-        """Fetch open orders right before reading books; detect fills. Returns list of fill events or None on failure."""
+        """Fetch open orders right before reading books, then read our maker fills from the exchange's trade records.
+        Returns fill events [(ts, cid, ys_side, qty)] or None if our open orders could not be read."""
         try:
-            oo = self.client.get_open_orders()
+            self.open_orders = self.client.get_open_orders()
         except Exception as e:
             self.log(f"get_open_orders error: {e}")
             return None
-        self.open_orders = oo
-        cur = {o["id"]: o for o in oo}
-        events = []
-        for oid, k in list(self.known.items()):
-            o = cur.get(oid)
-            if o is None:
-                if oid not in self.cancel_req:            # vanished without our cancel -> filled
-                    rem = k["size"] - k["matched"]
-                    if rem > 1e-9:
-                        events.append((int(time.time()), k["cid"], k["ys_side"], rem))
-                self.known.pop(oid, None)
-                self.cancel_req.pop(oid, None)
-            else:
-                m = float(o.get("size_matched") or 0)
-                if m > k["matched"] + 1e-9:
-                    events.append((int(time.time()), k["cid"], k["ys_side"], m - k["matched"]))
-                    k["matched"] = m
-        for oid in [i for i, t in self.cancel_req.items() if time.time() - t > 600]:
-            self.cancel_req.pop(oid, None)
+        return self._poll_fills(cfgs)
+
+    def _poll_fills(self, cfgs):
+        from py_clob_client_v2 import TradeParams
+        tok = {}
+        for cid, c in cfgs.items():
+            tok[c["yes"]] = (cid, True)
+            tok[c["no"]] = (cid, False)
+        try:
+            trades = self.client.get_trades(TradeParams(maker_address=self.user, after=int(self.last_trade_ts) - 120))
+        except Exception as e:
+            self.log(f"get_trades error: {e}")
+            return []
+        events, me = [], self.user.lower()
+        for t in trades or []:
+            tid = t.get("id")
+            if not tid or tid in self.seen_trades or "FAIL" in str(t.get("status", "")).upper():
+                continue
+            ts = _ts(t.get("match_time") or t.get("matched_at")) or time.time()
+            self.seen_trades[tid] = ts
+            self.last_trade_ts = max(self.last_trade_ts, ts)
+            legs = [mo for mo in (t.get("maker_orders") or []) if str(mo.get("maker_address", "")).lower() == me]
+            if not legs and str(t.get("maker_address", "")).lower() == me and t.get("trader_side") == "TAKER":
+                legs = [{"asset_id": t.get("asset_id") or t.get("token_id"), "side": t.get("side"),
+                         "matched_amount": t.get("size"), "price": t.get("price")}]
+            for mo in legs:
+                token = mo.get("asset_id") or mo.get("token_id")
+                if token not in tok:
+                    continue
+                cid, is_yes = tok[token]
+                buy = str(mo.get("side", "")).upper() == "BUY"
+                ys_side = "bid" if (is_yes and buy) or (not is_yes and not buy) else "ask"
+                events.append((int(ts), cid, ys_side, float(mo.get("matched_amount") or 0)))
+        for k in [k for k, v in self.seen_trades.items() if time.time() - v > 86400]:
+            self.seen_trades.pop(k, None)
         self.fills += events
         return events
 
@@ -154,26 +191,31 @@ class LiveBroker:
             else:
                 cancel.append(oo)
         failed_cids = set()
-        if cancel:
-            ids = [o["id"] for o in cancel]
-            for oid in ids:
-                self.cancel_req[oid] = time.time()
+        for i in range(0, len(cancel), 100):
+            chunk = cancel[i:i + 100]
             try:
-                r = self.client.cancel_orders(ids)
+                r = self.client.cancel_orders([o["id"] for o in chunk])
                 nc = (r or {}).get("not_canceled") if isinstance(r, dict) else None
-                for oid in (nc or {}):
-                    o = next((x for x in cancel if x["id"] == oid), None)
+                for oid, why in (nc.items() if isinstance(nc, dict) else []):
+                    if "match" in str(why).lower():
+                        continue          # already filled: not a failure; the fill arrives via the trades poll
+                    o = next((x for x in chunk if x["id"] == oid), None)
                     if o:
                         failed_cids.add(tok2cid.get(o["asset_id"]))
             except Exception as e:
                 self.log(f"cancel error: {e}")
-                failed_cids |= {tok2cid.get(o["asset_id"]) for o in cancel}
+                failed_cids |= {tok2cid.get(o["asset_id"]) for o in chunk}
+        if not self.ensure_heartbeat():
+            self.log("heartbeat not confirmed -> not posting this cycle")
+            return failed_cids | {None}
         posts, meta = [], []
         for k, o in want.items():
             if k in keep or o.cid in failed_cids:
                 continue
             c = cfgs[o.cid]
             try:
+                if o.side == "SELL":
+                    self._update_allowance(o.token)
                 self._sync_tick(o.token, c["tick"])
                 signed = self.client.create_order(
                     OrderArgs(token_id=o.token, price=o.price, size=o.size, side=o.side),
@@ -192,9 +234,7 @@ class LiveBroker:
                 self.log(f"post_orders unexpected response: {str(res)[:200]}")
                 continue
             for o, x in zip(meta[i:i + 15], res):
-                if isinstance(x, dict) and x.get("success") and x.get("orderID"):
-                    self.known[x["orderID"]] = {"cid": o.cid, "ys_side": o.ys_side, "size": o.size, "matched": 0.0}
-                else:
+                if not (isinstance(x, dict) and x.get("success")):
                     self.log(f"order rejected ({o.side} {o.size}@{o.price}): {str(x)[:160]}")
         return failed_cids
 
@@ -205,11 +245,22 @@ class LiveBroker:
         if isinstance(cache, dict) and cache.get(token) != ts:
             cache[token] = ts
 
+    def _update_allowance(self, token):
+        """Refresh the exchange's view of our collateral (token=None) or conditional-token allowance before selling."""
+        from py_clob_client_v2 import BalanceAllowanceParams, AssetType
+        if token in self.allowed_tokens:
+            return
+        try:
+            p = (BalanceAllowanceParams(asset_type=AssetType.COLLATERAL) if token is None else
+                 BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL, token_id=token))
+            self.client.update_balance_allowance(p)
+            self.allowed_tokens.add(token)
+        except Exception as e:
+            self.log(f"update_balance_allowance error: {e}")
+
     def cancel_all(self):
         try:
             self.client.cancel_all()
-            for oid in list(self.known):
-                self.cancel_req[oid] = time.time()
         except Exception as e:
             self.log(f"cancel_all error: {e}")
 
@@ -220,15 +271,20 @@ class LiveBroker:
             self.inv_stale = True
             return
         self._pos = pos
-        by_token = {p["asset"]: (float(p.get("size") or 0), float(p.get("initialValue") or 0)) for p in pos}
+        by_token = {p["asset"]: (float(p.get("size") or 0), float(p.get("initialValue") or 0))
+                    for p in pos if not p.get("redeemable")}   # resolved positions: redeem manually in the UI
         for cid, c in cfgs.items():
             y, n = by_token.get(c["yes"], (0.0, 0.0)), by_token.get(c["no"], (0.0, 0.0))
             self.inv[cid] = Inv(yes=y[0], no=n[0], cost=y[1] + n[1])
         self.inv_stale = False
 
     def all_position_cids(self):
-        pos = api.positions(self.user) or []
-        return sorted({p["conditionId"] for p in pos if float(p.get("size") or 0) >= 1})
+        for _ in range(5):
+            pos = api.positions(self.user)
+            if pos is not None:
+                return sorted({p["conditionId"] for p in pos if float(p.get("size") or 0) >= 1 and not p.get("redeemable")})
+            time.sleep(3)
+        raise SystemExit("Could not load existing positions at startup; refusing to trade blind.")
 
     def inventory(self, cid):
         return self.inv.get(cid, Inv())
@@ -244,19 +300,25 @@ class LiveBroker:
         except Exception:
             return None
 
+    def cash_cached(self, max_age=60):
+        if time.time() - self._cash_t > max_age:
+            c = self.cash_balance()
+            if c is not None:
+                self._cash, self._cash_t = c, time.time()
+        return self._cash
+
     def trading_equity(self, mids):
-        """cash + collateral reserved by open BUYs + positions at mid (rewards are paid into cash)."""
+        """collateral balance (already includes collateral reserved by our open BUYs) + positions at mid."""
         cash = self.cash_balance()
         if cash is None:
             return None
-        reserved = sum(float(o["price"]) * (float(o["original_size"]) - float(o.get("size_matched") or 0))
-                       for o in self.open_orders if o["side"].upper() == "BUY")
+        self._cash, self._cash_t = cash, time.time()
         pos = 0.0
         for cid, inv in self.inv.items():
             m = mids.get(cid)
             if m is not None:
                 pos += inv.yes * m + inv.no * (1 - m)
-        return cash + reserved + pos
+        return cash + pos
 
     def rewards_for_day(self, day):
         """Actual liquidity rewards credited by Polymarket for a UTC day (paid at midnight UTC)."""
@@ -269,6 +331,20 @@ class LiveBroker:
         self._stop = True
         self.cancel_all()
         self.log("cancelled all orders")
+
+
+def _ts(x):
+    """match_time may be unix seconds (str/int) or ISO-8601."""
+    if x is None:
+        return None
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        import datetime as dt
+        try:
+            return dt.datetime.fromisoformat(str(x).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
 
 
 def _tick_str(t):

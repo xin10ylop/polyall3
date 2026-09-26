@@ -19,13 +19,20 @@ Trading venue: **Polymarket only**. Weather markets excluded as required.
 | # | Idea | Data | Result |
 |---|---|---|---|
 | 1 | Soccer 1X2: Polymarket vs Pinnacle/Betfair closing line | 3,653 matches, 16 leagues, 2025/26, minute price history | Polymarket 5 min before kickoff is **as accurate or more accurate** than the sharp close (log-loss 1.0178 vs 1.0197 on English leagues; 11/16 leagues PM ≤ sharp). Mean |PM−sharp| 0.3–0.8 pp. No significant betting edge at T−120/60 min; T−5/15 "edges" were ~100 bets/season (t≈2.3 on 1 of 16 tried cells): noise/look-ahead. **Efficient.** |
-| 2 | Live sports: PM ask vs Pinnacle fair (all sports) | 302 matched events per snapshot, recorder running all session | Median edge −1.7% (spread+fee), 95th pct +0.07%. Only thin leagues with low Pinnacle limits show +3–5%. CLV check (64 events): PM-cheaper-than-Pinnacle bets held vs Pinnacle's close (+2.3¢ for edge>1%, n=21 events, mostly esports). **Promising but small sample; secondary.** |
+| 2 | Live sports: PM ask vs Pinnacle fair (all sports) | ~300 matched events per snapshot, recorded all session | Median edge −1.7% (spread+fee), 95th pct +0.07%. Only thin leagues with low Pinnacle limits show +3–5%. CLV vs Pinnacle's close: after 64 events, +2.3¢ for edge>1%. After 81 events this shrank to **+1.0¢** (28 events); soccer negative; esports edge>2% +4.6¢ on only 10 events. **Marginal / inconclusive.** |
 | 3 | Neg-risk bundle arbitrage | Live scan of 7,360 multi-outcome events / 116k books | 8 of 8,085 complete-outcome events positive, all illiquid (3–5 shares) or year-long lockups. The other "arbs" are augmented events with unlisted outcomes (not arbitrage). **Efficient.** |
 | 4 | Favorite/longshot bias in sports | 600k real taker fills, 1,500 moneyline markets, $111M | No bucket reliably mispriced; effective sample = markets, not fills. **No edge.** |
 | 5 | Post-game "endgame" (buy winner at 0.99 before resolution) | 250 games | Liquidity exists ($2.3M below 0.99 post-decision), but live-fill calibration at 0.99–0.995 returns ≈+0.5% with rare total losses; competitive. **Thin.** |
 | 6 | Longshot/favorite bias outside sports | 10,257 resolved markets, 125k fixed-time snapshots, clustered SE | Longshots won **more** than priced (0.10–0.20 bucket priced 14.7%, won 18.0%); buying NO on longshots loses (t=−6). Politics, economics, tech, culture, mentions, and fee-free geopolitics are fair after costs. **No edge.** |
 | 7 | Crypto "above $X on date" favorites | 2,421 strike markets, 300k real fills | Looked like +6.5%/$ (t=9). Real fills show "above" bets won at **every** price level and "below" bets lost at every level: the crypto rally, **regime not edge**. |
 | 8 | Crypto 5/15-min up/down | fee schedule + market structure | 7% fee rate (3.5% of stake at 50¢) + latency race vs bots. Violates "no millisecond strategies". **Rejected.** |
+
+| 9 | Copy the leaderboard | 3,102 leaderboard wallets, 339 analysed in depth, 506 copied entries | Most leaderboard PnL is concentrated (144/287 winners got ≥20% of PnL from one market). The steadiest wallets are crypto 5-min speed bots; similar bots lost as a group (−5.3%/$ pooled for 5-min takers), so they are excluded. Copying at +60 s keeps about half the edge, at +180 s about 20%. Maker edges can't be copied. **Not viable.** |
+| 10 | Endgame buying at ≥0.95 | 58,480 resolved buys by 272 wallets | +0.59%/$ pooled; politics at 0.95–0.97 lost 6.2%/$ (18% loss rate); one geopolitics tail event cost three wallets $400k. **Thin carry with fat tails.** |
+
+**Why the leaderboard hides the best small-capital edge:** leaderboard P&L counts trading P&L only, not liquidity
+rewards. Example: farmer `hfv` shows −$18.3k all-time on the leaderboard while having collected $24.3k in rewards,
+so reward farmers never rank on P&L leaderboards.
 
 ## 2. The edge: liquidity-reward harvesting
 
@@ -47,11 +54,16 @@ Trading venue: **Polymarket only**. Weather markets excluded as required.
 * **Population (not cherry-picked)**: the 200 most active wallets in ~40 thin rewarded markets → 95 received rewards in the last 7 days. 76/95 net profitable; aggregate +$110.2k/week; median ≈1.16%/day, 75th pct 2.84%/day, 90th pct 4.44%/day on capital. Farmers keep ~70% of reward+rebate income after adverse selection.
 * Sign convention verified (40/40 maker fills: the user's row carries the user's own side).
 
-### 2.3 Why a small account can win
+### 2.3 Supply of uncontested pools (pool tracker, every 5 min)
+Across ~2,080 rewarded non-weather markets, $16k–21k/day of reward pools have **no** competing liquidity inside the
+band at any moment. Over 15 minutes, 429/488 uncontested pools stayed uncontested, while new ones kept appearing.
+(Pool "start dates" are re-stamped daily by Polymarket, so pool age is not observable from the API.)
+
+### 2.4 Why a small account can win
 * When nobody quotes inside the band, a minimum-size order (20 shares ≈ $10–20 of collateral per side) earns **100%** of the pool. Right now ≈ $16.4k/day of non-weather pools have no competing liquidity inside the band.
 * The bot's allocator water-fills capital to the highest marginal reward per $, so $100 goes to ~5 uncontested pools; extra capital only helps once pools are contested.
 
-### 2.4 Where the risk is, and how the bot handles it
+### 2.5 Where the risk is, and how the bot handles it
 Adverse selection: quotes get hit right before information moves the price. The simulator's largest loss (−$39.50, "#2 global Netflix show") came from a market whose ranking is visible in real time.
 * **Jev screen** (TypeSafe Jev via OpenRouter Decisions API, ~$0.00004/market): realtime-observable outcome? decisive info within 72 h? news frequency? insider risk?
 * **Claude Opus 5.5 confirmation** (cascade): every market Jev passes is re-read in full by Opus before quoting (≈$0.009/market, cached 24 h). Opus caught what Jev missed: FlixPatrol as a live proxy for Netflix rankings; Super Bowl headliners usually announced in September.

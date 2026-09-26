@@ -109,8 +109,8 @@ def quote_prices(st, c, mode):
     bid, ask = st["bb"], st["ba"]
     if mode == "improve" and ask - bid > 2 * t + 1e-9:
         bid, ask = bid + t, ask - t
-    bid = min(_floor(bid, t), _floor(mid - t, t))
-    ask = max(_ceil(ask, t), _ceil(mid + t, t))
+    bid = min(_floor(bid, t), _floor(mid - t, t), _floor(st["ba"] - t, t))   # never cross the raw best ask
+    ask = max(_ceil(ask, t), _ceil(mid + t, t), _ceil(st["bb"] + t, t))      # never cross the raw best bid
     while mid - bid >= band - 1e-9 and bid + t <= mid - t + 1e-9:
         bid = round(bid + t, 6)
     while ask - mid >= band - 1e-9 and ask - t >= mid + t - 1e-9:

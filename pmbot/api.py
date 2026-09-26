@@ -1,20 +1,28 @@
 """Public Polymarket endpoints (no auth): markets, books, trades, positions, rewards, geoblock."""
-import time, random, requests
+import time, random, threading, requests
 from concurrent.futures import ThreadPoolExecutor
 
 GAMMA = "https://gamma-api.polymarket.com"
 DATA = "https://data-api.polymarket.com"
 CLOB = "https://clob.polymarket.com"
 
-S = requests.Session()
-S.headers["User-Agent"] = "pmbot/1.1"
+_TL = threading.local()
 
 
-def get(url, params=None, tries=4, timeout=15):
-    """GET JSON with bounded retries (worst case ~1 min). Returns None on failure."""
+def session():
+    """One requests.Session per thread (the universe thread's bursts don't share a pool with the quoting loop)."""
+    s = getattr(_TL, "s", None)
+    if s is None:
+        s = _TL.s = requests.Session()
+        s.headers["User-Agent"] = "pmbot/1.2"
+    return s
+
+
+def get(url, params=None, tries=3, timeout=10):
+    """GET JSON with bounded retries (worst case ~35 s). Returns None on failure."""
     for i in range(tries):
         try:
-            r = S.get(url, params=params, timeout=timeout)
+            r = session().get(url, params=params, timeout=timeout)
             if r.status_code == 429 or r.status_code >= 500:
                 time.sleep(1.0 * (i + 1) + random.random())
                 continue
@@ -60,9 +68,9 @@ def books(token_ids, workers=6):
     chunks = [token_ids[i:i + 100] for i in range(0, len(token_ids), 100)]
 
     def f(ch):
-        for i in range(3):
+        for i in range(2):
             try:
-                r = S.post(f"{CLOB}/books", json=[{"token_id": t} for t in ch], timeout=20).json()
+                r = session().post(f"{CLOB}/books", json=[{"token_id": t} for t in ch], timeout=10).json()
                 if isinstance(r, list):
                     return r
             except Exception:
@@ -79,8 +87,10 @@ def books(token_ids, workers=6):
 
 
 def market_trades(condition_id, limit=500, taker_only=True):
-    """Most recent trades for a market (newest first). taker_only=False also returns each maker leg."""
-    r = get(f"{DATA}/trades", {"market": condition_id, "limit": limit, "takerOnly": str(taker_only).lower()})
+    """Most recent trades for a market (newest first). taker_only=False also returns each maker leg.
+    The data-api response is CDN-cached for up to 300 s; a unique cache-buster parameter forces a fresh read."""
+    r = get(f"{DATA}/trades", {"market": condition_id, "limit": limit, "takerOnly": str(taker_only).lower(),
+                               "_": time.time_ns()})
     return r if isinstance(r, list) else None
 
 

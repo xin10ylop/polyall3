@@ -29,3 +29,23 @@ def test_apply_buy_then_sell_cash_and_inventory():
     assert pb.inv["c"].yes == 20 and abs(pb.cash + 8.0) < 1e-9
     pb._apply("c", Order("c", "Y", "SELL", 0.45, 20, "ask", 0.45), 20)
     assert pb.inv["c"].yes == 0 and abs(pb.cash - 1.0) < 1e-9
+
+
+def test_poll_fills_placed_filter_queue_and_dedupe(monkeypatch):
+    import time as _t
+    from pmbot import paper as P
+    now = int(_t.time())
+    pb = PaperBroker(log=lambda *a: None)
+    c = {"cid": "c", "yes": "Y", "no": "N"}
+    pb.sync({"c": [Order("c", "Y", "BUY", 0.40, 20, "bid", 0.40)]}, {"c": {"bids": [(0.40, 10.0)], "asks": []}})
+    old = {"transactionHash": "t0", "proxyWallet": "m0", "asset": "Y", "size": "50", "price": "0.39", "side": "BUY",
+           "timestamp": now - 600}                                  # before our order existed -> ignored
+    at = {"transactionHash": "t1", "proxyWallet": "m1", "asset": "Y", "size": "15", "price": "0.40", "side": "BUY",
+          "timestamp": now + 1}                                     # at our level: 10 ahead of us -> we get 5
+    taker = {"transactionHash": "t1", "proxyWallet": "tk", "asset": "Y", "size": "15", "price": "0.40", "side": "SELL",
+             "timestamp": now + 1}
+    feeds = {False: [at, taker, old], True: [taker]}
+    monkeypatch.setattr(P.api, "market_trades", lambda cid, taker_only=True, **k: feeds[taker_only])
+    ev = pb.poll_fills({"c": c})
+    assert [(e[2], e[3]) for e in ev] == [("bid", 5.0)]
+    assert pb.poll_fills({"c": c}) == []                            # same prints are not re-applied
