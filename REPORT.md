@@ -10,11 +10,12 @@ corrections are incorporated below.
 |---|---|
 | **Candidate edge** | **Liquidity-reward harvesting in quiet, uncontested pools.** Polymarket pays makers a daily reward per market by a published formula, split by each maker's share of qualifying resting liquidity. The bot rests minimum-size, two-sided, post-only quotes inside the reward band of pools where nobody else quotes and almost nothing trades. |
 | **Verified** | Rewards are real and paid on-chain; an auditor matched payouts to pUSD inflows to the cent in 16/16 wallets. Uncontested, quiet pools exist in quantity. In one 2.25-h window (Sat 17:55–20:10 UTC), **302 pools worth $8.3k/day stayed uncontested throughout**, and **189 of them ($5.1k/day) pass the bot's own filters**. Their median activity is 1 trade and ~$1 traded per 24 h. A pessimistic-on-fill-count 7-day replay shows fill losses of **≈3–4% of those pools' rewards**. |
-| **Not verified, and it decides everything** | Whether Polymarket actually pays a *lone* minimum-size quoter what the formula implies. No public data answers this, and an attempted natural experiment was inconclusive (§2.4). Experienced farmers leave these pools alone, which is a warning sign. |
+| **Payout evidence (new, audited)** | Polymarket paid **$128.6k** of liquidity rewards for 2026-09-25, consistent with the ≈$115–130k/day of listed pools that had a scoring quote at a snapshot. **Sponsored pools, whose per-market payouts are public on-chain, show single wallets paid 99.7% of a pool's daily rate (2 pools), 58–88% (8 pools) and 4–15% (5 pools), i.e. pro-rata to minutes quoted.** Sponsored pools use the same scoring as native ones. This is the first direct public evidence that a lone quoter is paid (§2.4). |
+| **Not yet verified on our own account** | That *native* pools pay a lone minimum-size quoter the same way, over several days, on our pools. The $100 pilot logs this per market (§7). Most empty pools are new and farmers arrive within hours to days (§2.3), so long-run share will fall below 100%. |
 | **What typical farmers actually earn (audited)** | Pooled across all farmers: ≈0.5–0.7%/day at mid marks and ≈0.15–0.2%/day at liquidation marks. **Non-weather farmers (n = 5–6 survivors):** ≈0.2–0.3%/day at mid; over the latest 7 days, **−0.24%/day at liquidation marks**. Fill losses eat 60–85% of rewards. |
-| **Executable?** | Yes. Post-only limit orders, no latency race, requoting every 20 s. Two code audits; details and remaining gaps in §5. |
+| **Executable?** | Yes. Post-only limit orders, no latency race, requoting every 20 s. Four code audits; the last two re-verified every fix, and the remaining items are low-severity (§5). 41 regression tests. |
 | **Small capital?** | Yes, *if* the payout holds. A 20-share two-sided quote needs ≈$19 of collateral, so $100 covers ≈5 pools. |
-| **$100/day?** | **Not established.** At the audited non-weather rate (≈0.25%/day) it would take ≈$40k. It is reachable with small capital **only if** lone quoters are paid as the formula says. The bot's paper estimate for $100 across 5 pools is ≈$215–265/day, but that number *assumes* the unverified payout. |
+| **$100/day?** | **Plausible with $100–200, not yet proven.** The bot's estimate for $100 across 5 uncontested $50/day pools is ≈$215–265/day at a 100% share. Sponsored-pool payouts support the lone-quoter mechanics, but native payouts on our own account and the long-run share (competitors arrive) are unmeasured. A 50% long-run share would still give ≈$110–130/day. For contrast, typical contested farming at ≈0.25%/day would need ≈$40k. |
 | **Decisive next step** | A **$100 live pilot, at least 3 full UTC days** (§7). Within the first hour, the bot logs Polymarket's own per-market reward percentage for our orders, and at 01:30 and 06:00 UTC each day it logs actual versus estimated payout. |
 
 ## 1. What was tested and rejected (with evidence)
@@ -114,10 +115,41 @@ Measured on Saturday 2026-09-26 from 17:55 UTC, first over 2.25 h (28 snapshots)
   * This is pessimistic on *fill count* only. It uses a 7-day window, 24 h marks, and no resolution events, so insider
     and resolution tail risk is under-sampled. For contrast, real non-weather farmers lose 49–85% of rewards to fills;
     the difference comes entirely from the quiet-pool selection.
-* **Payout:** an attempted natural experiment was **inconclusive**. It looked at 172 makers that traded ≤5 markets and
-  were paid rewards. Its one striking case, `qingkes`, turned out to be a ~$9.7k round trip in a game-day sports pool
-  with a 1,000-share minimum; that pool was $50/day and contested most of the day. There is **no public evidence either
-  way** on lone-quoter payouts.
+* **Payout: what public data shows** (`research/payout_check.py`, `competitiveness_check.py`,
+  `sponsored_recorder.py` / `sponsored_check.py`; independently audited, audit #5):
+  * **Rewards are paid, and precisely.** Native rewards for UTC day D are paid in pUSD by one distributor EOA
+    (`0x2c27…a709`, via batch contract `0xd152…`) within ~20 s of 00:00 UTC on D+1. For 2026-09-25 that was
+    **$128,287.48 to 2,238 wallets**, and 300/300 sampled recipients have a matching data-api `REWARD` row.
+    Sponsored rewards are paid separately by the sponsor contract `0xdd8d…9e8b` (~00:20 UTC; $327), for $128.6k in
+    total. Holding, rebate and referral payouts come from other senders and are excluded.
+  * **Aggregate consistency.** On Sat 26 Sep (21:15–21:47 UTC), 64–70% of the listed $181–194k/day sat in pools where
+    someone was scoring:
+    * $115–130k/day by our formula, depending on how the minimum size is applied;
+    * $122.7k/day by Polymarket's own `market_competitiveness`, which agrees pool-by-pool with our formula on 91% of
+      dollars.
+
+    This is *consistent with* listed rates being paid to whoever scores, with no large haircut. It compares one
+    moment with a different day's payout, though. The listing moves by ±$50k within a day and daily payouts over 30
+    days ranged $96k–200k, so a ~10–20% haircut cannot be excluded.
+  * **Direct evidence that a lone quoter is paid: sponsored pools.** Sponsored pools use the same scoring as native
+    pools (Polymarket help centre). Unlike native pools, the sponsor contract logs **(market, wallet, amount)** for
+    each pool on-chain. For 2026-09-25:
+    * in 15 sponsored pools a **single wallet** was paid;
+    * in 2 of them it received **99.7% of the pool's daily rate** ($4.99 of $5.00; $2.19 of $2.20);
+    * in 8 others it received 58–88%, and in 5 it received 4–15% (brief quoting, or a rate that changed).
+
+    Some of these wallets hold only $2–3 in positions. So Polymarket's scoring pays a lone quoter the whole pool
+    **pro-rata to the minutes it scores**.
+
+    Caveats: rates are compared at their current values; the pools are tiny ($2–25/day); and native pools are paid by
+    a different sender. The per-minute recorder (`sponsored_recorder.py`) plus `sponsored_check.py` turn this into a
+    minute-by-minute test for any full UTC day.
+  * **Per-minute, not per-day.** The sponsor help page says the unearned part of each day is refunded, and single
+    wallets received fractions such as 0.667 (16 of 24 h). Pools are therefore paid per minute scored. The
+    documentation's day-level normalisation would pay a pool in full if anyone scored once, and that is not what
+    happens. The bot quotes continuously, and its estimate accrues per elapsed time, so it does not depend on this.
+  * An earlier natural experiment on native payouts (172 makers in ≤5 markets) was inconclusive. Its one striking
+    case, `qingkes`, was a contested sports pool.
 
 ### 2.5 Does a Jev → Claude toxicity screen help? Tested three ways; it does not pay for itself
 | Test | Result |
@@ -160,6 +192,8 @@ optimistic and is **not** used.
 | Code audit #1 | Whole bot vs py-clob-client-v2 source, docs, live endpoints | Verified correct: client usage, post-only (no taker path), YES/NO conversions, scoring formula, mirrored books, no secret logging. Found 2 CRITICAL (the geoblock check did not check geoblock; the heartbeat kept stale quotes alive during stalls), 7 HIGH, 10 MEDIUM. Fixed. |
 | Code audit #2 (verification) | The rewrite | Confirmed both CRITICALs and most HIGH/MEDIUM fixed. H2/H3/H6 and M2/M3/M7/M8/M9 were only partially fixed at that point. Found 3 new HIGH: equity double-counted reserved collateral; fills inferred from vanished orders; paper feed cached for 300 s. Fixes followed, but audit #3 found several of them incomplete. |
 | Code audit #3 (verification) | Fixes after audit #2, activity filter, trade-gated jump guard | No CRITICAL. 1 HIGH: the paper fill model still credited late prints to the wrong order, which is optimistic. 6 MEDIUM: quotes could still cross the raw book in 15 of 551 markets; live fill parsing relied on an unverified row shape; false drawdown stops from cash/position read skew; resolved winners dropped from equity; an old fill re-emitted every cycle after a 24 h lull; universe churn from counting our own quotes as competition. 10 LOW. All fixed in commit e8cb20c with regression tests (31 passing). |
+| Code audit #4 (verification) | Fixes for audit #3 | 13 of 15 items FIXED, 2 PARTIAL (drawdown sampling, allowance ordering). A 108k-book fuzz found no crossing quotes. New: 1 MEDIUM (frequent fills could starve the drawdown stop) and 5 LOW (a lagged SELL could inflate the peak; a requote race in paper; an over-broad cancel-reason match; extra data-api time between heartbeats; a stale own-order snapshot in ranking). All but the last fixed in commit f0358d2 with tests. The last is a minor ranking skew and is left as is. |
+| Payout audit (#5) | On-chain reward totals, payable-vs-paid, lone-quoter evidence | Paid total SUPPORTED (300/300 recipients match; sponsored rewards add $327). Paid ≈ payable only PARTIALLY SUPPORTED: consistent, but a one-moment, cross-day comparison with low power. The payout looks per-minute, not per-day. Found the public per-market sponsored payouts that give the lone-quoter evidence in §2.4. |
 | Farmer-profitability audit | Independent re-derivation, including on-chain equity accounting for 16 wallets via archive RPC | **Partially supported**; corrected numbers adopted in §0/§2.2. |
 | Report audit | Every claim in README/REPORT vs the evidence files | Found 13 issues, including gate-default inconsistency, the invalid `qingkes` example, unwindowed pool figures, the unaudited "$100/day on $1–2.5k" row, and missing scripts. All addressed in this version. |
 | Leaderboard forensics | 3,102 wallets | See §1, rows 5, 8 and 9. |
