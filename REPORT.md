@@ -89,6 +89,20 @@ so reward farmers never rank on P&L leaderboards.
   3. an undocumented payout rule.
   Only (3) would break the thesis; a live pilot settles it.
 * Some pools pay in USDC.e rather than pUSD (sponsored pools).
+* **Topics** of the 219 quiet pools:
+  * other: 102 pools, $2.3k/day;
+  * **AI model releases and API prices: 39 pools, $1.6k/day, all flagged insider-prone by Jev** (e.g. "Will GPT
+    Sol's output price be ≥ $20 in 2026?");
+  * elections: 23, $0.56k/day;
+  * awards: 19, $0.54k/day;
+  * crypto/finance: 14; geopolitics: 10; sports: 12.
+* **Risk backtest** (`research/quiet_risk_bt.py`), deliberately pessimistic:
+  * Method: replay the last 7 days of real taker trades in 315 stable uncontested pools as if our 20-share quotes sat
+    at the top of the book and absorbed every trade; mark each fill 24 h later.
+  * Result: median 0.57 fills/day and **$0.11/day of adverse selection per pool** (90th pct $3.22, 99th $9.54).
+  * **Total: $247/day of fill losses against $8,725/day of pool rewards (≈3%)**, vs 60–85% for farmers in contested
+    pools. Only 1/315 pools lost more than its reward.
+  * So on public data, the risk side of the thesis holds. What remains unverified is the payout to a lone quoter.
 
 ### 2.4 Why a small account can win
 * When nobody quotes inside the band, a minimum-size order (20 shares ≈ $10–20 of collateral per side) earns **100%** of the pool. Right now ≈ $16.4k/day of non-weather pools have no competing liquidity inside the band.
@@ -148,3 +162,31 @@ bot's own results. The real-wallet evidence (§2.2) does not depend on this feed
 
 ## 6. Results of the forward test
 _Filled in at the end of the run._
+
+## 7. The decisive test: a $100 live pilot (procedure and pre-committed decision rule)
+Why this matters: every public-data check has been done. The one question that decides whether this is a small edge
+(≈0.2–0.3%/day, like typical non-weather farmers) or a large one (collecting quiet uncontested pools) is **does
+Polymarket pay a lone minimum-size quoter what the formula says?** Only a live account can answer it, and $100 is enough.
+
+1. **Eligibility:** run only where Polymarket permits trading. The bot exits if `polymarket.com/api/geoblock`
+   reports your IP as blocked.
+2. **Account:** create a fresh Polymarket account used only for the bot, and deposit $100 (pUSD).
+   * `PM_FUNDER` = the account's deposit (proxy) address.
+   * `PM_PRIVATE_KEY` = the exported signing key.
+   * `PM_SIGNATURE_TYPE` = 1 for email login, 2 for a browser wallet.
+   * Keep the key in `.env` only; never commit it.
+3. **Run:** `python -m pmbot.run --mode live --capital 100 --out runs`, then leave it running.
+4. **Read the log daily.** At 01:30 UTC a line `{"reconcile_day": D, "estimated_rewards": E, "actual_rewards": A}`
+   appears, together with `trading_equity` (fills marked to mid) and the `FILL` lines.
+5. **Decision rule (commit to it in advance):**
+   * `A ≥ 0.5 × E` for 3 consecutive days, **and** the trading-equity drawdown is smaller than cumulative `A`:
+     the thesis holds. Scale capital stepwise (e.g. ×2 every 3 days), watching `A/E` (competition arrives) and
+     fill losses.
+   * `A < 0.2 × E`: lone quoters are not being paid as modelled. **Stop.** At the audited ≈0.2–0.3%/day the
+     strategy is not worth running at small scale.
+   * In between: keep running at $100 for a week, then decide.
+6. **Risks you accept:**
+   * inventory from fills (max 1 quote size per market, at most 35% of capital per market);
+   * rare jumps against a resting quote (bounded by the quote size);
+   * resolution/dispute risk on inventory held to resolution;
+   * Polymarket changing the reward program at any time.
