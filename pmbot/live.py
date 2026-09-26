@@ -22,6 +22,8 @@ from . import api
 from .engine import Inv
 
 HOST = os.environ.get("PM_CLOB_HOST", "https://clob.polymarket.com")
+GONE = ("already matched", "matched", "not found", "already canceled", "already cancelled", "can't be found",
+        "does not exist", "not exist")
 
 
 class LiveBroker:
@@ -214,7 +216,7 @@ class LiveBroker:
                 nc = (r or {}).get("not_canceled") if isinstance(r, dict) else None
                 for oid, why in (nc.items() if isinstance(nc, dict) else []):
                     w = str(why).lower()
-                    if any(s in w for s in ("match", "not found", "cancel", "not exist", "does not")):
+                    if "fail" not in w and any(s in w for s in GONE):
                         continue          # already filled or already gone: not a failure (fills come via trades)
                     o = next((x for x in chunk if x["id"] == oid), None)
                     if o:
@@ -222,6 +224,9 @@ class LiveBroker:
             except Exception as e:
                 self.log(f"cancel error: {e}")
                 failed_cids |= {tok2cid.get(o["asset_id"]) for o in chunk}
+        for k, o in want.items():          # allowance refreshes first: nothing slow between heartbeat and posts
+            if o.side == "SELL" and k not in keep and o.cid not in failed_cids:
+                self._update_allowance(o.token)
         if not self.ensure_heartbeat():
             self.log("heartbeat not confirmed -> not posting this cycle")
             return failed_cids | {None}
@@ -231,8 +236,6 @@ class LiveBroker:
                 continue
             c = cfgs[o.cid]
             try:
-                if o.side == "SELL":
-                    self._update_allowance(o.token)
                 self._sync_tick(o.token, c["tick"])
                 signed = self.client.create_order(
                     OrderArgs(token_id=o.token, price=o.price, size=o.size, side=o.side),
@@ -301,7 +304,7 @@ class LiveBroker:
         if pos is None:
             self.inv_stale = True
             return
-        self._pos = pos
+        self._pos, self._pos_t = pos, time.time()
         by_token = {p["asset"]: (float(p.get("size") or 0), float(p.get("initialValue") or 0))
                     for p in pos if not p.get("redeemable")}   # resolved positions: redeem manually in the UI
         self.redeemable_usd = sum(float(p.get("currentValue") or 0) for p in pos if p.get("redeemable"))
@@ -344,7 +347,8 @@ class LiveBroker:
         Positions and cash are read back to back so a fill between the two reads cannot fake a gain or a loss
         (residual data-api lag is handled by the caller's post-fill quiet period). Resolved, not yet redeemed
         positions count at their redemption value; our markets at mid; anything else at its current price."""
-        pos = api.positions(self.user)
+        fresh = getattr(self, "_pos_t", 0) > time.time() - 10
+        pos = self._pos if fresh else api.positions(self.user)   # the loop calls this right after refresh_inventory
         cash = self.cash_balance()
         if cash is None or pos is None:
             return None

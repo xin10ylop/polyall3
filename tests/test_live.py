@@ -198,3 +198,11 @@ def test_l1_already_gone_cancel_is_not_a_failure():
     b.client.cancel_resp = {"canceled": [], "not_canceled": {"a": "order not found or already canceled",
                                                              "b": "order can't be found - already canceled"}}
     assert "c" not in b.sync({"c": []}, CFGS)
+
+
+def test_n4_real_cancel_failure_is_a_failure():
+    b = mk()
+    b.client.oo = [oo("a", "Y", "BUY", 0.49, 50)]
+    b.refresh_open(CFGS)
+    b.client.cancel_resp = {"canceled": [], "not_canceled": {"a": "failed to cancel order: context canceled"}}
+    assert "c" in b.sync({"c": []}, CFGS)

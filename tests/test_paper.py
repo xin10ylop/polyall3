@@ -87,3 +87,22 @@ def test_h1_no_replay_of_old_prints_for_long_resting_orders(monkeypatch):
     for _ in range(5):
         pb.poll_fills({"c": c})
     assert r["queue_ahead"] == 40.0 and pb.fills == []               # applied once, never replayed
+
+
+def test_n3_one_print_fills_one_order_per_side_across_requote(monkeypatch):
+    import time as _t
+    from pmbot import paper as P
+    pb = PaperBroker(log=lambda *a: None)
+    c = {"cid": "c", "yes": "Y", "no": "N"}
+    pb.sync({"c": [Order("c", "Y", "BUY", 0.40, 20, "bid", 0.40)]}, {"c": {"bids": [], "asks": []}})
+    pb.sync({"c": [Order("c", "Y", "BUY", 0.41, 20, "bid", 0.41)]}, {"c": {"bids": [], "asks": []}})
+    ts = int(_t.time())
+    for r in pb.recent:
+        r["removed"] = ts
+    for r in pb.resting.values():
+        r["placed"] = ts                                   # requote in the same second as the print
+    pr = {"transactionHash": "x", "proxyWallet": "m", "asset": "Y", "size": "50", "price": "0.39", "side": "BUY",
+          "timestamp": ts}
+    monkeypatch.setattr(P.api, "market_trades", lambda cid, taker_only=True, **k: [] if taker_only else [pr])
+    ev = pb.poll_fills({"c": c})
+    assert sum(e[3] for e in ev) == 20.0

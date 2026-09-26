@@ -109,6 +109,7 @@ class PaperBroker:
                     r["filled"] += f
                     self._apply(cid, o, f)
                     events.append((ts, cid, o.ys_side, f))
+                    break     # we rest one order per side, so one print can fill only one of them (requote races)
         self.resting = {k: r for k, r in self.resting.items() if r["o"].size - r["filled"] > 1e-9}
         # prune dedupe memory only below every order that could still be filled (no replays of old prints)
         live_orders = list(self.resting.values()) + self.recent

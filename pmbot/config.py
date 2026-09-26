@@ -39,7 +39,7 @@ CFG = {
     "cycle_seconds": 20,
     "watchdog_sec": 50,               # live: heartbeats stop (exchange cancels all orders) if no healthy cycle for this long
                                       # (2 x cycle + 10: one failed cycle does not wipe the book)
-    "fill_quiet_sec": 120,            # drawdown check paused this long after a fill (positions API indexing lag)
-    "drawdown_samples": 3,            # drawdown must persist over this many consecutive equity samples
+    "drawdown_samples": 3,            # peak and drawdown must each persist over this many consecutive equity samples
+                                      # (live: one per minute), so position-API lag around a fill cannot trip the stop
     "universe_refresh_min": 30,
 }

@@ -54,7 +54,7 @@ def test_l2_allocate_prefers_quiet_pool_for_extra_size():
     quiet = {"cid": "q", "v": 4.5, "min_size": 20, "rate": 50, "tick": 0.01, "usd24": 0.0}
     busy = dict(quiet, cid="b", usd24=900.0)
     al = selection.allocate([quiet, busy], dict(CFG, capital_usd=1000), {"q": st, "b": st}, 1000)
-    assert al.get("q", 0) >= al.get("b", 0)
+    assert al.get("q", 0) > al.get("b", 0)
 
 
 def test_l3_truncated_activity_page_counts_as_active(monkeypatch):
@@ -63,3 +63,13 @@ def test_l3_truncated_activity_page_counts_as_active(monkeypatch):
     monkeypatch.setattr(api, "market_trades", lambda cid, limit=500, taker_only=True: rows)
     usd, _ = api.activity_24h("x")
     assert usd == float("inf")
+
+
+def test_m6_incumbent_bonus_keeps_quoted_pool_against_slightly_better_newcomer(monkeypatch):
+    a = _book([(0.30, 500)], [(0.70, 500)])                  # both uncontested; B pays 10% more
+    _patch(monkeypatch, {"A": a, "B": a})
+    rm = api.rewarded_markets()
+    rm[1]["total_daily_rate"] = 22
+    monkeypatch.setattr(api, "rewarded_markets", lambda: rm)
+    assert [c["cid"] for c in selection.build_candidates(CF, None, lambda *x: None)] == ["B"]
+    assert [c["cid"] for c in selection.build_candidates(CF, None, lambda *x: None, incumbents={"A"})] == ["A"]

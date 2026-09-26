@@ -12,6 +12,24 @@ from .selection import build_candidates, allocate
 from .jev import ToxicityCache, SPENT
 
 
+class DrawdownGuard:
+    """Stop only on a drawdown that persists. Both the peak and the trough must hold for `k` consecutive equity
+    samples, so a short spike (a SELL fill before the positions API shows it) cannot inflate the peak and a short dip
+    (a BUY fill before its position shows up) cannot trip the stop. Fills do not pause the check."""
+
+    def __init__(self, k, limit_usd):
+        self.k, self.limit, self.win, self.peak = k, limit_usd, deque(maxlen=k), None
+
+    def add(self, eq):
+        """Returns True when the stop should fire."""
+        self.win.append(eq)
+        if len(self.win) < self.k:
+            return False
+        floor_, ceil_ = min(self.win), max(self.win)
+        self.peak = floor_ if self.peak is None else max(self.peak, floor_)
+        return self.peak - ceil_ > self.limit
+
+
 class Universe:
     """Background refresher: the (slow) market selection never blocks the quoting loop."""
 
@@ -100,8 +118,8 @@ def main():
     except Exception:
         pass
     last_score_t = 0.0
-    peak_eq, start, last_t, last_eq_t, eq = None, time.time(), None, 0.0, None
-    last_fill_t, breaches = 0.0, 0
+    start, last_t, last_eq_t, eq = time.time(), None, 0.0, None
+    guard = DrawdownGuard(cfg["drawdown_samples"], cfg["max_drawdown_frac"] * cfg["capital_usd"])
     try:
         while time.time() - start < a.hours * 3600:
             t0 = time.time()
@@ -118,10 +136,14 @@ def main():
                         time.sleep(5)
                         continue
                     broker.refresh_inventory(cfgs)
+                    if t0 - last_eq_t > 60:     # equity from the positions just read + cash read right after them
+                        eq, last_eq_t = broker.trading_equity(last_mid), t0
+                        if eq is not None and guard.add(eq):
+                            log(f"max drawdown hit (peak {guard.peak:.2f}, last {eq:.2f}) -> stopping")
+                            break
                 else:
                     ev = broker.poll_fills(cfgs, in_u)
                 for (_, cid, ys_side, qty) in [(e[0], e[1], e[2], e[-1]) for e in ev]:
-                    last_fill_t = t0
                     side_block[(cid, ys_side)] = t0 + cfg["fill_guard_sec"]
                     fill_seen[(cid, ys_side)] = t0
                     log(f"FILL {ys_side} {qty:.1f} | {cfgs.get(cid, {}).get('q', cid)[:60]}")
@@ -229,24 +251,12 @@ def main():
                     json.dump({"day": cur_day.isoformat(), "day_est": day_est,
                                "pending": [(d.isoformat(), e, n) for d, e, n in pending]}, fh)
                 os.replace(state_f + ".tmp", state_f)
-                # 7) trading equity (excludes estimated rewards) + drawdown stop
+                # 7) trading equity (excludes estimated rewards) + drawdown stop (live: sampled after inventory)
                 if a.mode == "paper":
                     eq = broker.trading_equity(last_mid)
-                elif t0 - last_eq_t > 60:
-                    eq, last_eq_t = broker.trading_equity(last_mid), t0
-                # A fill moves cash at once but positions only after the data-api indexes it (30-90 s): skip samples
-                # near a fill, and stop only if the drawdown persists over several consecutive samples.
-                new_sample = a.mode == "paper" or t0 == last_eq_t
-                if eq is not None and new_sample and t0 - last_fill_t > cfg["fill_quiet_sec"]:
-                    peak_eq = eq if peak_eq is None else max(peak_eq, eq)
-                    if peak_eq - eq > cfg["max_drawdown_frac"] * cfg["capital_usd"]:
-                        breaches += 1
-                        log(f"drawdown sample {breaches}/{cfg['drawdown_samples']} (peak {peak_eq:.2f} -> {eq:.2f})")
-                        if breaches >= cfg["drawdown_samples"]:
-                            log(f"max drawdown hit (peak {peak_eq:.2f} -> {eq:.2f}) -> stopping")
-                            break
-                    else:
-                        breaches = 0
+                    if guard.add(eq):
+                        log(f"max drawdown hit (peak {guard.peak:.2f}, last {eq:.2f}) -> stopping")
+                        break
                 rec = {"ts": int(t0), "hrs": round((t0 - start) / 3600, 3), "n_quoted": sum(1 for v in desired.values() if v),
                        "rate_cons_usd_day": round(rate_c, 2), "rew_cons": round(rew["cons"], 4), "rew_cent": round(rew["cent"], 4),
                        "trading_equity": None if eq is None else round(eq, 4), "avail": round(avail, 2),
