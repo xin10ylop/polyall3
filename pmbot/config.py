@@ -12,8 +12,15 @@ CFG = {
     "mid_range": (0.10, 0.90),        # single-sided liquidity still scores 1/3 here; outside it both sides are required
     "exclude_regex": r"temperature|precipitation|rain|snow|hurricane|tornado|weather|°[CF]|inches of|Up or Down",
     "min_est_roi_day": 0.01,          # projected reward per $ locked per day (conservative share) to be eligible
+    # --- activity filter (quiet pools: few fills -> little adverse selection) ---
+    "activity_top_n": 300,            # measure 24h trading for this many top candidates per refresh
+    "max_trades_24h_usd": 1000,       # skip pools whose market traded more than this in 24h
+    "max_range_24h": 0.10,            # ...or whose traded price ranged more than this in 24h
+    "adverse_rate": 0.05,             # expected loss per $ filled (real farmers: 3-5%)
+    "fill_share": 0.5,                # assume we absorb this share of a quiet market's 24h taker $ (we'd be top of book)
     # --- Jev toxicity gate ---
-    "use_jev": os.environ.get("PMBOT_USE_JEV", "0") == "1",   # opt-in: showed no measurable reduction in adverse selection (REPORT §2.5)
+    "use_jev": os.environ.get("PMBOT_USE_JEV", "1") == "1",   # on: see REPORT §2.5 (null on farmers' markets, but
+                                                               # uncontested pools are out-of-sample and insider-prone)
     "max_realtime": 0.5,
     "max_reveal_soon": 0.4,
     "max_news_speed": 1.5,            # 0=rarely .. 3=constantly

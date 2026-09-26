@@ -5,12 +5,17 @@ many markets whose reward pools are thinly contested. It is the one edge that su
 else (see [REPORT.md](REPORT.md)). An optional **Jev → Claude Opus 5.5** toxicity cascade is included, but on
 46k real fills it showed **no** power to predict adverse selection, so it is off by default.
 
-> **Honest summary.** This is a real, contractual edge. Polymarket pays ~$134k/day to makers by a published formula,
-> and real wallets farm it profitably: 76 of 95 active farmers were net positive last week, with a median of ~1%/day
-> on capital and the best small accounts at 5–7%/day. It is **not** $100/day on $100 from day one; nothing
-> legitimate is. At 1–4%/day you need ≈$2.5k–$10k deployed for $100/day, reached by compounding or adding capital.
-> Run it in paper mode, then live with $100, and compare the bot's daily *estimated* rewards with Polymarket's
-> *actual* payouts (logged automatically) before scaling.
+> **Honest summary (after independent audits).**
+> * **Real:** Polymarket pays ~$134k/day to makers by a published formula, and the payouts are verifiable on-chain.
+> * **Thin for typical farmers:** audited non-weather farmers net only ≈0.2–0.3%/day on capital, because fill
+>   losses eat 60–85% of rewards.
+> * **The upside is unverified.** ≈$6k/day of reward pools sit in *quiet* markets with no competing quote and ~1 trade
+>   per day. By the documented formula a lone minimum-size quote collects them at little risk. Whether Polymarket
+>   actually pays a lone quoter that way can only be confirmed live.
+> * **Next step:** paper mode, then **live with $100 for 1–3 days**. The bot logs Polymarket's actual daily payout
+>   next to its own estimate. Scale only if actual ≈ estimate.
+> * **Not promised:** $100/day. At the audited rate that needs ≈$40k; at small capital it is possible only if the
+>   quiet-pool thesis holds.
 
 ## How it works
 
@@ -70,18 +75,16 @@ python -m pytest -q tests
    `{"reconcile_day": ..., "estimated_rewards": X, "actual_rewards": {...}}`, which compares the model's estimate
    with what Polymarket actually paid. Scale up only after several days of actual payouts net of fills.
 
-## Scaling plan (evidence-based, not a promise)
+## What to expect (evidence-based, not a promise)
 
-| Capital deployed | Net/day at 1%/day (median farmer) | at 2.8%/day (top quartile) | at 4.4%/day (top decile) |
+| Scenario | Evidence | Net return on deployed capital | $100/day needs |
 |---|---|---|---|
-| $100 | $1 | $2.80 | $4.40 |
-| $1,000 | $10 | $28 | $44 |
-| $3,500 | $35 | $98 | $154 |
-| $10,000 | $100 | $280 | $440 |
+| Typical non-weather farmer (audited) | ~6 wallets, 7–90 days, on-chain | ≈0.2–0.3%/day | ≈$35–50k |
+| Surviving maker farmers, all categories | 27 wallets, 30–90 days | ≈0.4–0.6%/day | ≈$17–25k |
+| Best small non-weather farmers (mid-marked, optimistic) | 2 wallets, 30 days | ≈4–11%/day | ≈$1–2.5k |
+| Quiet uncontested pools (this bot's focus) | formula + live books; **payout unverified** | paper gross is far higher; verify live | unknown until the pilot |
 
-Compounding at 2%/day takes $100 to $3,500 in ~180 days; at 4%/day, ~90 days. Capacity per bot is set by the
-number of acceptable, thinly contested pools (currently ~40 markets and ~$1k of quotes). Beyond that, more capital
-means bigger quotes in contested pools and a lower return per dollar.
+Capacity per bot is set by the number of acceptable, thinly contested pools, not by capital.
 
 ## Repository
 

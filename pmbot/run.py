@@ -49,6 +49,8 @@ def main():
     cfg = dict(CFG)
     if a.capital:
         cfg["capital_usd"] = a.capital
+    # breadth scales with capital (~$8 per min-size two-sided quote); keeps LLM review cost small for small accounts
+    cfg["max_markets"] = min(cfg["max_markets"], max(10, int(cfg["capital_usd"] / 8)))
     os.makedirs(a.out, exist_ok=True)
     tag = f"{a.mode}_{int(cfg['capital_usd'])}_{dt.datetime.utcnow().strftime('%Y%m%dT%H%M')}"
     logf = open(os.path.join(a.out, tag + ".jsonl"), "a")

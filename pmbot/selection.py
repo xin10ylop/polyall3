@@ -66,6 +66,27 @@ def build_candidates(cfg, tox_cache=None, log=print):
         if c["est_roi"] >= cfg["min_est_roi_day"]:
             out.append(c)
     out.sort(key=lambda x: -x["est_roi"])
+    # Activity filter: real farmers lose 3-5% per $ filled; fills come from taker flow. Prefer quiet pools and charge
+    # expected adverse selection against the reward estimate.
+    from concurrent.futures import ThreadPoolExecutor
+    top = out[: cfg["activity_top_n"]]
+    with ThreadPoolExecutor(8) as ex:
+        acts = list(ex.map(lambda c: api.activity_24h(c["cid"]), top))
+    kept_a = []
+    for c, act in zip(top, acts):
+        if act is None:
+            continue
+        usd24, rng24 = act
+        c["usd24"], c["rng24"] = usd24, rng24
+        if usd24 > cfg["max_trades_24h_usd"] or rng24 > cfg["max_range_24h"]:
+            continue
+        cap = 2 * c["min_size"] * max(0.05, min(c["mid"], 1 - c["mid"]))
+        c["adverse_usd_day"] = cfg["adverse_rate"] * cfg["fill_share"] * min(usd24, 2 * c["min_size"])
+        c["est_roi"] -= c["adverse_usd_day"] / max(cap, 1e-9)
+        if c["est_roi"] >= cfg["min_est_roi_day"]:
+            kept_a.append(c)
+    log(f"activity filter: {len(kept_a)}/{len(top)} quiet enough")
+    out = sorted(kept_a, key=lambda x: -x["est_roi"])
     if cfg["use_jev"] and tox_cache is not None:
         kept, reviews = [], 0
         for c in out[: cfg["max_markets"] * 3]:

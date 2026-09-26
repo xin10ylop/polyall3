@@ -94,6 +94,18 @@ def market_trades(condition_id, limit=500, taker_only=True):
     return r if isinstance(r, list) else None
 
 
+def activity_24h(condition_id):
+    """(taker $ traded, YES-price range) over the last 24h, from fresh (cache-busted) trade prints; None on failure."""
+    t = market_trades(condition_id, limit=500, taker_only=True)
+    if t is None:
+        return None
+    cut = time.time() - 86400
+    t = [x for x in t if x.get("timestamp", 0) > cut]
+    usd = sum(float(x["size"]) * float(x["price"]) for x in t)
+    ps = [float(x["price"]) if x.get("outcomeIndex", 0) == 0 else 1 - float(x["price"]) for x in t]
+    return usd, (max(ps) - min(ps)) if ps else 0.0
+
+
 def positions(user, page=500):
     """All positions of a wallet (paginated). Returns None on any failure (callers must keep last known state)."""
     out, off = [], 0

@@ -7,12 +7,13 @@ Trading venue: **Polymarket only**. Weather markets excluded as required.
 
 | | |
 |---|---|
-| **Edge found** | **Liquidity-reward harvesting**: rest minimum-size, two-sided, post-only quotes inside the reward band of many thinly contested markets that pay Polymarket CLOB liquidity rewards. |
-| Why it is an edge | Polymarket pays ~$134k/day to makers. The pool is split by a published formula, so income is contractual rather than a forecasting bet. Many pools have little or no competition inside the band. |
-| Is it real? | Yes, on real wallets. Of 95 wallets active in thin rewarded markets that received rewards last week (no cherry-picking), **76 were net profitable after fill losses**. In aggregate: rewards $127.8k + rebates $21.1k − adverse selection $38.7k = **+$110.2k**. The median farmer made **≈1%/day on capital**; the top 10% made ≥4.4%/day; the best small accounts made 6–7%/day on $600–$1,500. |
-| Executable? | Yes. Orders are post-only limit orders (never pay taker fees), with a minimum size of 20 shares and no latency race. Quotes are refreshed every 20 s, and income depends on minutes-long resting time, not milliseconds. |
-| Small capital? | Yes. Reward share does not depend on size when a pool is uncontested, so minimum-size quotes (~$10–20 per market) capture it. A $100 account can quote 5 markets. |
-| $100/day? | **Not from day one with $100. No legitimate edge does 100%/day.** At the evidence-based 1–4%/day, $100/day needs ≈$2.5k–$10k deployed: reached by compounding (e.g., ~4 months at 3%/day from $100) or by adding capital. The live bot logs actual vs estimated rewards daily so this can be verified within days at $100. |
+| **Edge found** | **Liquidity-reward harvesting**: rest minimum-size, two-sided, post-only quotes inside the reward band of Polymarket markets that pay CLOB liquidity rewards, prioritising **quiet, uncontested pools**. |
+| Why it is an edge | Polymarket pays ~$134k/day to makers by a published formula. The income is contractual, not a forecasting bet. |
+| What is **verified** (independently audited) | Rewards are paid on-chain; audit matched pUSD inflows to the cent in 16/16 wallets. For surviving maker farmers, rewards exceeded fill losses over 7–90 days. **But the audited return is thin**: ≈0.5–0.7%/day pooled at mid, ≈0.15–0.2%/day at liquidation marks. For **non-weather** farmers (the only kind allowed here) it is ≈0.2–0.3%/day, with fill losses eating 60–85% of rewards. My first, un-audited population numbers (76/95 profitable, ~1%/day) were **overstated** (truncated fills, mid-marking, takers in the sample). See §2.2. |
+| What is **promising but unverified** | At any moment **≈$9k/day of non-weather pools have no competing quote inside the band** (325 pools stable for 1.3 h+; Polymarket's own `market_competitiveness` = 0). **222 of them (≈$6k/day) are quiet**: median 1 trade and $2 traded per 24 h. A lone minimum-size quote there should (by the documented formula) collect the pool while almost never being filled. Whether Polymarket actually pays a lone quoter as the formula says **cannot be verified without a live account**. Experienced farmers leave these pools alone, which is a warning sign. |
+| Executable? | Yes: post-only limit orders, no latency race, quotes refreshed every 20 s. Audited twice; every critical and high finding was fixed and has a test. |
+| Small capital? | Yes. In an uncontested pool, reward share does not depend on size, so ~$10–20 of quotes per market is enough. |
+| $100/day? | **Not established.** At the audited non-weather rate (≈0.25%/day) it would need ≈$40k. It is reachable at small capital **only if** the uncontested-pool thesis holds. The cheapest decisive test is a **$100 live pilot for 1–3 days**; the bot logs Polymarket's actual payout against its own estimate every day (§7). |
 
 ## 1. What was tested and rejected (with evidence)
 
@@ -58,16 +59,36 @@ so reward farmers never rank on P&L leaderboards.
 | `0x1ef01de8…` | ~$1.1k | House/Senate races, Gemini release date, Prague mayor (~300 markets) | 41 straight days since Aug 15, $170/day → $1.1–1.6k/day | $16,930 | −$13,326 | **+$3,604 (≈$120/day)** |
 | `T22222222222` | ~$2.4k | midterm vote totals, GPU-price index, governor races, jobs data | 28 days, ramping to $400–700/day | $6,006 | −$2,949 | **+$3,057 (≈$102/day)** |
 
-  Both clear **$100/day net on $1–2.5k**, sustained over 30 days. Adverse selection took 50–79% of their rewards,
-  which is why this bot adds a toxicity cascade and fill guards. Caveat: open positions (many resolve in Nov 2026)
-  are marked at the current mid.
-* **Population (not cherry-picked)**: the 200 most active wallets in ~40 thin rewarded markets → 95 received rewards in the last 7 days. 76/95 net profitable; aggregate +$110.2k/week; median ≈1.16%/day, 75th pct 2.84%/day, 90th pct 4.44%/day on capital. Farmers keep ~70% of reward+rebate income after adverse selection.
+  At mid marks both clear ~$100/day net on $1–2.5k over 30 days. **Caveat from the audit:** mid-marking flatters
+  farmers. Maker losses roughly double as fills age (−71 bp for fills under 3 days vs −142 bp for 3–7 days), and
+  many of these positions resolve in Nov 2026. Treat these two as optimistic best cases, not typical results.
+* **Population, as first computed (overstated):** 95 wallets that received rewards in the last 7 days. The claim was
+  76/95 net profitable, +$110.2k/week, ~1%/day median.
+* **Population, corrected by the independent audit:**
+  * ~55–65/95 profitable; +$40–65k/week at mid, less at liquidation marks.
+  * Pooled 0.5–0.7%/day at mid, 0.15–0.2%/day at liquidation marks.
+  * 53 of the "profitable" wallets were profitable *before* rewards (takers, plus a 12-wallet sibling cluster). Only 29
+    were true reward farmers: 24/29 profitable at mid, 18/29 at liquidation.
+  * Surviving farmers over 30–90 days: 0.43–0.62%/day, with trading losses ≈37–43% of rewards.
+  * **Non-weather farmers: ≈0.2–0.3%/day**, losses ≈60–85% of rewards. The largest non-weather farmer (0x21ffd2b7,
+    $310k) was ≈0.2%/day over 30 days and negative last week.
+  * Weather-heavy farmers did best (1.06%/day pooled at mid), but weather is excluded here.
 * Sign convention verified (40/40 maker fills: the user's row carries the user's own side).
 
 ### 2.3 Supply of uncontested pools (pool tracker, every 5 min)
-Across ~2,080 rewarded non-weather markets, $16k–21k/day of reward pools have **no** competing liquidity inside the
-band at any moment. Over 15 minutes, 429/488 uncontested pools stayed uncontested, while new ones kept appearing.
-(Pool "start dates" are re-stamped daily by Polymarket, so pool age is not observable from the API.)
+* Across ~2,080 rewarded non-weather markets, $16k–21k/day of reward pools have **no** competing liquidity inside
+  the band at any moment.
+* **325 pools ($9.0k/day) stayed uncontested in every snapshot over 1.3 h.** Polymarket's own
+  `market_competitiveness` for them is 0.
+* Their 24 h activity: median **1** taker trade and **$2** traded; 75th percentile 3 trades / $30.
+* **222 pools ($6.0k/day) are "quiet"** (≤3 trades and <3¢ price range in 24 h). 72 ($2.2k/day) are busy or
+  volatile and are excluded by the bot's activity filter.
+* Why would farmers leave them? Possible reasons:
+  1. insider-prone topics (e.g. "Will the next Claude Sonnet be released on Sep 29?");
+  2. new pools that farmers' bots have not picked up yet;
+  3. an undocumented payout rule.
+  Only (3) would break the thesis; a live pilot settles it.
+* Some pools pay in USDC.e rather than pUSD (sponsored pools).
 
 ### 2.4 Why a small account can win
 * When nobody quotes inside the band, a minimum-size order (20 shares ≈ $10–20 of collateral per side) earns **100%** of the pool. Right now ≈ $16.4k/day of non-weather pools have no competing liquidity inside the band.
@@ -86,9 +107,13 @@ across 9,001 markets, each fill marked to resolution or current mid):
   * Claude Opus 5.5, on the 30 worst vs 30 best markets: AUC 0.49 (p = 0.56).
   * The 3-hour simulator had suggested otherwise (Jev-passed markets +$15.7, rejected −$23.1). That was
     small-sample noise, and the simulator also read the cached trade feed (audit N6).
-  * **Decision:** the toxicity gate is **opt-in** (`PMBOT_USE_JEV=1`) rather than default. It removes ~40% of pools
-    (reward income) without measurably reducing losses. Opus still catches individual obvious hazards (e.g.
-    "headliners usually announced in September"), so it is kept as an optional sanity layer.
+  * **Caveat, selection bias:** this test only covers markets that experienced farmers *chose* to quote. The
+    uncontested pools this bot targets are exactly the ones they avoid, and they include insider-prone topics (model
+    release dates, award results, halftime headliners). There the gate is out-of-sample and plausibly useful.
+  * **Decision:** the gate stays **on by default** (`PMBOT_USE_JEV=0` disables it). Its cost is a few cents a day
+    and some forgone pools.
+* **Activity filter (data-driven, on by default):** skip pools whose market traded >$1k or ranged >10¢ in 24 h, and
+  charge expected fill losses (5% × half the 24 h taker flow) against each pool's reward estimate.
 * Controls that **do** bound losses mechanically:
   * no quoting within 72 h of a market's end date;
   * rolling 5-min jump guard (≥ 4¢ → unwind-only for 60 min);
@@ -114,7 +139,7 @@ _Filled in at the end of the run — see §6._
 |---|---|---|
 | Code audit #1 | whole bot vs py-clob-client-v2 source, docs, and live endpoints | Verified correct: client API usage, post-only (no taker path), YES/NO conversions, the scoring formula, mirrored books (30/30), no secret logging. Found 2 CRITICAL (geoblock check didn't check geoblock; heartbeat kept stale quotes alive during stalls), 7 HIGH, 10 MEDIUM. **All fixed**, with reproductions added as tests. |
 | Code audit #2 (verification) | the rewrite | Confirmed C1, C2, H1, H4, H5, H7, M1, M4, M5, M6, M10, L3, L6, L8 fixed. Found 3 new HIGH: equity double-counted reserved collateral; fill detection inferred fills from vanished orders; the paper feed was CDN-cached for up to 300 s, biasing paper P&L optimistic. **All fixed and tested** (18 tests). |
-| Farmer-profitability audit | independent re-derivation of the population result | _pending_ |
+| Farmer-profitability audit | independent re-derivation, including on-chain equity accounting for 16 wallets via archive RPC | **Partially supported.** Rewards measured correctly (matched on-chain to the cent) and side convention correct (54/54 on-chain). Headline overstated: a 30k-fill pagination cap dropped the oldest (worst) fills; mid-marks flatter farmers; carry-in losses were ignored; takers and a sibling cluster were in the sample. Corrected: pooled 0.5–0.7%/day at mid, 0.15–0.2%/day at liquidation; **non-weather ≈0.2–0.3%/day**. All corrections adopted in §0/§2.2. |
 | Leaderboard forensics | 3,102 wallets | See §1 rows 9–10. |
 
 Consequence of audit #2 (N6) for this report: the first simulator (`research/rw_sim.py`) and the first paper runs
