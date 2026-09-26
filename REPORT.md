@@ -118,7 +118,8 @@ not measured.**
 * Controls that bound losses mechanically:
   * no quoting within 72 h of a market's end date;
   * an activity filter (skip >$1k traded or >10¢ range in 24 h) and an expected-fill-loss charge
-    (`0.05 × 0.5 × min(24 h taker $, 2 × min_size)` per day, so ≤ ~$1–2.5 per pool);
+    (`0.05 × min(0.5 × 24 h taker $, $ our quotes put at risk)` per day, i.e. at most 5% of a pool's quote
+    collateral per day), applied both in ranking and in allocation;
   * a jump guard: mid ranges ≥4¢ within 5 min **and** a trade or one of our fills occurred → unwind-only for 60 min;
   * a 3-min block on a side after it fills;
   * max inventory of 1× quote size, and ≤35% of capital per market;
@@ -140,7 +141,8 @@ optimistic and is **not** used.
 | Audit | Scope | Result |
 |---|---|---|
 | Code audit #1 | Whole bot vs py-clob-client-v2 source, docs, live endpoints | Verified correct: client usage, post-only (no taker path), YES/NO conversions, scoring formula, mirrored books, no secret logging. Found 2 CRITICAL (the geoblock check did not check geoblock; the heartbeat kept stale quotes alive during stalls), 7 HIGH, 10 MEDIUM. Fixed. |
-| Code audit #2 (verification) | The rewrite | Confirmed both CRITICALs and most HIGH/MEDIUM fixed. H2/H3/H6 and M2/M3/M7/M8/M9 were only partially fixed at that point. Found 3 new HIGH: equity double-counted reserved collateral; fills inferred from vanished orders; paper feed cached for 300 s. These and the partial items were then fixed with tests (19 passing). **The fixes after audit #2 (including the activity filter and the trade-gated jump guard) have not been re-audited independently.** |
+| Code audit #2 (verification) | The rewrite | Confirmed both CRITICALs and most HIGH/MEDIUM fixed. H2/H3/H6 and M2/M3/M7/M8/M9 were only partially fixed at that point. Found 3 new HIGH: equity double-counted reserved collateral; fills inferred from vanished orders; paper feed cached for 300 s. Fixes followed, but audit #3 found several of them incomplete. |
+| Code audit #3 (verification) | Fixes after audit #2, activity filter, trade-gated jump guard | No CRITICAL. 1 HIGH: the paper fill model still credited late prints to the wrong order, which is optimistic. 6 MEDIUM: quotes could still cross the raw book in 15 of 551 markets; live fill parsing relied on an unverified row shape; false drawdown stops from cash/position read skew; resolved winners dropped from equity; an old fill re-emitted every cycle after a 24 h lull; universe churn from counting our own quotes as competition. 10 LOW. All fixed in commit e8cb20c with regression tests (31 passing). |
 | Farmer-profitability audit | Independent re-derivation, including on-chain equity accounting for 16 wallets via archive RPC | **Partially supported**; corrected numbers adopted in §0/§2.2. |
 | Report audit | Every claim in README/REPORT vs the evidence files | Found 13 issues, including gate-default inconsistency, the invalid `qingkes` example, unwindowed pool figures, the unaudited "$100/day on $1–2.5k" row, and missing scripts. All addressed in this version. |
 | Leaderboard forensics | 3,102 wallets | See §1, rows 5, 8 and 9. |
@@ -167,9 +169,11 @@ says. Only a live account can answer it.
 5. **Daily:** at 01:30 and again at 06:00 UTC, the log records
    `{"reconcile_day": D, "estimated_rewards": E, "actual_rewards": A}`. If `A` is empty or 0, check the Polymarket UI
    and your USDC.e balance (sponsored pools) before concluding anything.
-6. **Decision rule** (commit to it in advance; needs at least 3 full UTC days):
-   * `A ≥ 0.5·E` for 3 consecutive days **and** the trading-equity drawdown is below cumulative `A`: scale stepwise
-     (e.g. ×2 every 3 days), watching `A/E` and fill losses as competition arrives.
+6. **Decision rule** (commit to it in advance; needs at least 3 full UTC days). `trading_equity` is CLOB cash plus
+   positions, so pUSD reward payouts are already inside it. Net P&L = `equity − start equity`. Fill losses =
+   `net P&L − cumulative A`.
+   * `A ≥ 0.5·E` for 3 consecutive days, net P&L > 0, **and** fill losses smaller than half of cumulative `A`: scale
+     stepwise (e.g. ×2 every 3 days), watching `A/E` and fill losses as competition arrives.
    * `A < 0.2·E`: lone quoters are not paid as modelled. **Stop.** At ≈0.2–0.3%/day it is not worth running small.
    * In between: run a week at $100, then decide.
 7. **Risks you accept:**

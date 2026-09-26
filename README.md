@@ -25,8 +25,11 @@ pools**. It is the only candidate edge that was not rejected after a day of test
    * all markets paying liquidity rewards (`/rewards/markets/current`);
    * drop weather, crypto up/down, markets within 72 h of their end date, and mids outside 0.10–0.90;
    * compute our reward share with the exact scoring formula against the live book;
-   * **activity filter:** skip markets that traded >$1k or ranged >10¢ in the last 24 h, and charge expected fill
-     losses (`0.05 × 0.5 × min(24 h taker $, 2 × min_size)` per day) against the reward estimate.
+   * **activity filter:** skip markets that traded >$1k or ranged >10¢ in the last 24 h (or have more than 500
+     prints), and charge expected fill losses (`0.05 × min(0.5 × 24 h taker $, $ our quotes put at risk)` per day)
+     against the reward estimate and in allocation;
+   * our own resting orders are removed from the book before scoring, and pools we already quote get a 1.25×
+     ranking bonus, so a refresh does not churn them out.
 2. **Optional toxicity cascade** (`PMBOT_USE_JEV=1`, off by default):
    * **Jev** (TypeSafe, via OpenRouter Decisions API) scores whether the outcome tracks a live public number, whether
      news is due within 72 h, and how often news arrives.
@@ -36,16 +39,18 @@ pools**. It is the only candidate edge that was not rejected after a day of test
 3. **Allocation:** capital is water-filled to the highest marginal reward per $ locked. In an uncontested pool, extra
    size adds nothing, so extra capital buys breadth: more pools.
 4. **Quoting** (every 20 s): one post-only order per side, joining the best bid/ask but always on the correct side of
-   the size-adjusted mid, inside the reward band, and never crossing the book. Held inventory is sold rather than
+   the size-adjusted mid and inside the reward band. A side that could only be placed at or through the opposite
+   best quote is skipped. Held inventory is sold rather than
    hedged with the complement token.
 5. **Risk controls:**
    * **Jump guard:** if the mid ranges ≥4¢ within 5 min *and* there was a trade (or one of our fills) in that window,
      the market goes unwind-only for 60 min.
    * After a fill, that side of that market is blocked for 3 min.
    * Max inventory is 1× quote size, and at most 35% of capital goes to one market.
-   * 15% drawdown stop on trading equity (estimated rewards are excluded).
+   * 15% drawdown stop on trading equity (estimated rewards are excluded). The drawdown must persist over 3
+     consecutive samples and is not checked within 2 min of a fill, because the positions API lags cash by 30–90 s.
    * **Heartbeat dead-man switch with watchdog:** the exchange cancels every order ≈15 s after the process dies, or
-     ≈45 s after the loop stalls.
+     ≈65 s after the loop stalls.
    * Any live-loop error triggers cancel-all.
 
 ## Quick start
@@ -58,7 +63,7 @@ set -a; source .env; set +a
 # Paper mode: live books + real (cache-busted) trade prints, queue-position fill model. No wallet needed.
 python -m pmbot.run --mode paper --capital 100 --out runs     # optional: --hours N
 
-python -m pytest -q tests       # 19 tests
+python -m pytest -q tests       # 31 tests
 ```
 
 Environment variables:
@@ -79,6 +84,9 @@ Environment variables:
    * `PM_SIGNATURE_TYPE`
 4. `python -m pmbot.run --mode live --capital 100 --out runs`, and keep it running.
 5. **Read the log:**
+   * `trade-row sample` at startup: one raw fill record from the exchange. Check that it has `maker_orders`
+     entries with our address or API key; fill detection relies on it. Any `WARNING: MAKER trade row` line means a
+     fill was not parsed.
    * `scoring_snapshot` every 30 min: Polymarket's own reward percentage per market, and how many of our orders are
      scoring. This is the fastest verdict on the payout question.
    * `reconcile_day` at 01:30 and 06:00 UTC: actual vs estimated rewards.
@@ -108,4 +116,4 @@ covers. Above that, the number of acceptable uncontested pools (≈189 / ≈$5.1
   * `jev.py` optional Jev + LLM cascade
   * `config.py` parameters
 * `research/`: study scripts behind REPORT.md (see `research/README.md`; evidence data is not committed)
-* `tests/`: 19 regression tests, including reproductions of the audit findings
+* `tests/`: 31 regression tests, including reproductions of the audit findings

@@ -16,3 +16,4 @@ earlier outputs:
 | `farmer_markout.py`, `farmer_population.py` | real-farmer markouts (see the audit corrections in REPORT §2.2) |
 | `gate_validate.py`, `gate_market_volume.py`, `gate_opus_extremes.py`, `gate_uncontested.py`, `jev_tox.py` | toxicity-gate tests |
 | `pool_tracker.py`, `quiet_pools.py`, `quiet_risk_bt.py` | uncontested/quiet pool supply and the 7-day risk backtest |
+| `payout_check.py`, `payout_analyze.py`, `empty_pools.py` | on-chain daily reward totals vs pools with a scoring quote (aggregate payout check); why empty pools are empty |
