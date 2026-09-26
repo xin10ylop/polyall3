@@ -103,6 +103,16 @@ so reward farmers never rank on P&L leaderboards.
   * **Total: $247/day of fill losses against $8,725/day of pool rewards (≈3%)**, vs 60–85% for farmers in contested
     pools. Only 1/315 pools lost more than its reward.
   * So on public data, the risk side of the thesis holds. What remains unverified is the payout to a lone quoter.
+* **Circumstantial evidence on payouts** (natural experiment: 172 makers that traded in ≤5 markets in the last week
+  and received rewards):
+  * `qingkes` (`0x1d2b12e5…`) was dormant since April, then from Sep 22 earned
+    **$46 → $276 → $342 → $372 → $482/day**. Its recent fills are in a $1,200/day pool that shows no competing
+    in-band liquidity. Only ~$16 of positions and no pUSD are visible, so its real capital base is unclear.
+  * Single-market makers in heavily contested pools earn amounts consistent with a proportional share: e.g. a
+    $1,000/day pool with Q≈193k pays one maker ~$50–76/day, and a $100/day pool with Q≈1.3M pays two makers
+    ~$17–43/day each.
+  * This is consistent with the formula paying whoever supplies the qualifying liquidity. It is **not** proof for our
+    specific quote placement; the live pilot is.
 
 ### 2.4 Why a small account can win
 * When nobody quotes inside the band, a minimum-size order (20 shares ≈ $10–20 of collateral per side) earns **100%** of the pool. Right now ≈ $16.4k/day of non-weather pools have no competing liquidity inside the band.
