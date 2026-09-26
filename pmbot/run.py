@@ -87,6 +87,15 @@ def main():
     mids_hist, last_mid, cooldown, side_block, fill_seen = {}, {}, {}, {}, {}
     rew = {"cons": 0.0, "cent": 0.0}
     day_est, cur_day, pending = 0.0, dt.datetime.utcnow().date(), []
+    state_f = os.path.join(a.out, f"state_{a.mode}_{int(cfg['capital_usd'])}.json")
+    try:   # survive restarts: today's running reward estimate and days awaiting reconciliation
+        stt = json.load(open(state_f))
+        if stt.get("day") == cur_day.isoformat():
+            day_est = float(stt.get("day_est", 0.0))
+        pending = [(dt.date.fromisoformat(d), e, n) for d, e, n in stt.get("pending", [])]
+    except Exception:
+        pass
+    last_score_t = 0.0
     peak_eq, start, last_t, last_eq_t, eq = None, time.time(), None, 0.0, None
     try:
         while time.time() - start < a.hours * 3600:
@@ -185,15 +194,28 @@ def main():
                 day_est += rate_c * el / 86400
                 now_utc = dt.datetime.utcnow()
                 if now_utc.date() != cur_day:          # day rolled: remember yesterday's estimate
-                    pending.append((cur_day, day_est))
+                    pending.append((cur_day, day_est, 0))
                     day_est, cur_day = 0.0, now_utc.date()
-                if pending and now_utc.hour * 60 + now_utc.minute >= 90:   # rewards are paid ~00:00 UTC; check 01:30
-                    for d, est in pending:
-                        rec = {"reconcile_day": d.isoformat(), "estimated_rewards": round(est, 4)}
+                # rewards are paid ~00:00 UTC but can post late: check at 01:30 and again at 06:00 UTC
+                mins = now_utc.hour * 60 + now_utc.minute
+                still = []
+                for d, est, n in pending:
+                    if (n == 0 and mins >= 90) or (n == 1 and mins >= 360):
+                        rec = {"reconcile_day": d.isoformat(), "check": n + 1, "estimated_rewards": round(est, 4)}
                         if a.mode == "live":
                             rec["actual_rewards"] = broker.rewards_for_day(d.isoformat())
                         logf.write(json.dumps(rec) + "\n"); logf.flush(); log(json.dumps(rec))
-                    pending.clear()
+                        n += 1
+                    if n < 2:
+                        still.append((d, est, n))
+                pending = still
+                json.dump({"day": cur_day.isoformat(), "day_est": day_est,
+                           "pending": [(d.isoformat(), e, n) for d, e, n in pending]}, open(state_f, "w"))
+                if a.mode == "live" and t0 - last_score_t > 1800:   # fast signal: are we actually being credited?
+                    snap = broker.scoring_snapshot()
+                    logf.write(json.dumps({"ts": int(t0), "scoring_snapshot": snap}) + "\n"); logf.flush()
+                    log(f"scoring snapshot: {str(snap)[:300]}")
+                    last_score_t = t0
                 # 7) trading equity (excludes estimated rewards) + drawdown stop
                 if a.mode == "paper":
                     eq = broker.trading_equity(last_mid)

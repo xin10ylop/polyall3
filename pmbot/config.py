@@ -19,8 +19,8 @@ CFG = {
     "adverse_rate": 0.05,             # expected loss per $ filled (real farmers: 3-5%)
     "fill_share": 0.5,                # assume we absorb this share of a quiet market's 24h taker $ (we'd be top of book)
     # --- Jev toxicity gate ---
-    "use_jev": os.environ.get("PMBOT_USE_JEV", "1") == "1",   # on: see REPORT §2.5 (null on farmers' markets, but
-                                                               # uncontested pools are out-of-sample and insider-prone)
+    "use_jev": os.environ.get("PMBOT_USE_JEV", "0") == "1",   # off by default: in every test the gate cost far more
+                                                               # reward than it saved in fill losses (REPORT §2.5)
     "max_realtime": 0.5,
     "max_reveal_soon": 0.4,
     "max_news_speed": 1.5,            # 0=rarely .. 3=constantly

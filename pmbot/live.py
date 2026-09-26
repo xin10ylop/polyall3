@@ -320,6 +320,25 @@ class LiveBroker:
                 pos += inv.yes * m + inv.no * (1 - m)
         return cash + pos
 
+    def scoring_snapshot(self):
+        """Fast pilot signal: Polymarket's own view of our reward share per market, and whether our orders score."""
+        from py_clob_client_v2 import OrdersScoringParams
+        out = {}
+        try:
+            out["reward_percentages"] = self.client.get_reward_percentages()
+        except Exception as e:
+            out["reward_percentages_error"] = str(e)[:200]
+        ids = [o["id"] for o in self.open_orders][:500]
+        if ids:
+            try:
+                sc = self.client.are_orders_scoring(OrdersScoringParams(orderIds=ids))
+                if isinstance(sc, dict):
+                    out["orders_scoring"] = sum(1 for v in sc.values() if v)
+                    out["orders_total"] = len(sc)
+            except Exception as e:
+                out["orders_scoring_error"] = str(e)[:200]
+        return out
+
     def rewards_for_day(self, day):
         """Actual liquidity rewards credited by Polymarket for a UTC day (paid at midnight UTC)."""
         try:

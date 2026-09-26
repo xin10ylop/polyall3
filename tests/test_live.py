@@ -12,7 +12,7 @@ class _A:
 
 
 stub.BalanceAllowanceParams = stub.OrderArgs = stub.PartialCreateOrderOptions = stub.PostOrdersV2Args = _A
-stub.TradeParams = _A
+stub.TradeParams = stub.OrdersScoringParams = _A
 stub.AssetType = types.SimpleNamespace(COLLATERAL="COLLATERAL", CONDITIONAL="CONDITIONAL")
 stub.OrderType = types.SimpleNamespace(GTC="GTC")
 
@@ -44,6 +44,8 @@ class FakeClient:
     def post_orders(s, posts, post_only=False):
         s.posted += posts
         return [{"success": True, "orderID": f"o{len(s.posted)}"} for _ in posts]
+    def get_reward_percentages(s): return {"c": 100.0}
+    def are_orders_scoring(s, p): return {i: True for i in p.orderIds}
     def post_heartbeat(s, hid):
         s.hb += 1
         return {"heartbeat_id": f"h{s.hb}"}
@@ -120,3 +122,12 @@ def test_keep_matching_open_order_no_churn():
     b.refresh_open(CFGS)
     b.sync({"c": [Order("c", "Y", "BUY", 0.49, 20, "bid", 0.49)]}, CFGS)
     assert b.client.posted == []
+
+
+def test_scoring_snapshot_reports_share_and_scoring_orders():
+    b = mk()
+    b.client.oo = [oo("a", "Y", "BUY", 0.49, 20), oo("b", "N", "BUY", 0.49, 20)]
+    b.refresh_open(CFGS)
+    snap = b.scoring_snapshot()
+    assert snap["reward_percentages"] == {"c": 100.0}
+    assert snap["orders_scoring"] == 2 and snap["orders_total"] == 2
