@@ -4,7 +4,7 @@ A bot that rests minimum-size, two-sided, post-only quotes in **quiet, uncontest
 pools**. It is the only candidate edge that was not rejected after a day of testing ten strategy families (see
 [REPORT.md](REPORT.md)). **Its profitability at small capital is still unverified.**
 
-> **Honest summary** (eight audit passes by separate agents: four of the code, two of the report, one each of the
+> **Honest summary** (nine audit passes by separate agents: five of the code, two of the report, one each of the
 > farmer data and the payout evidence. The payout audit's sponsored-pool reading was wrong and has been withdrawn.)
 > * **Real:** Polymarket pays makers a daily reward per market by a published formula. It paid **$128.5k** for
 >   2026-09-25, on-chain, to ≈2,260 wallets.
@@ -72,7 +72,7 @@ set -a; source .env; set +a
 # Paper mode: live books + real (cache-busted) trade prints, queue-position fill model. No wallet needed.
 python -m pmbot.run --mode paper --capital 100 --out runs     # optional: --hours N
 
-python -m pytest -q tests       # 41 tests
+python -m pytest -q tests       # 43 tests
 ```
 
 Environment variables:
@@ -126,4 +126,4 @@ covers. Above that, the number of acceptable uncontested pools (≈160–189 poo
   * `jev.py` optional Jev + LLM cascade
   * `config.py` parameters
 * `research/`: study scripts behind REPORT.md (see `research/README.md`; evidence data is not committed)
-* `tests/`: 41 regression tests, including reproductions of the audit findings
+* `tests/`: 43 regression tests, including reproductions of the audit findings

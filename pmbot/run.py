@@ -121,6 +121,11 @@ def main():
     last_score_t = 0.0
     start, last_t, last_eq_t, eq = time.time(), None, 0.0, None
     guard = DrawdownGuard(cfg["drawdown_samples"], cfg["max_drawdown_frac"] * cfg["capital_usd"])
+    try:   # a restart must not re-arm another full drawdown allowance
+        guard.peak = json.load(open(state_f)).get("peak_eq")
+    except Exception:
+        pass
+    eq_missing = 0
     try:
         while time.time() - start < a.hours * 3600:
             t0 = time.time()
@@ -139,6 +144,10 @@ def main():
                     broker.refresh_inventory(cfgs)
                     if t0 - last_eq_t > 60:     # equity from the positions just read + cash read right after them
                         eq, last_eq_t = broker.trading_equity(last_mid), t0
+                        eq_missing = 0 if eq is not None else eq_missing + 1
+                        if eq_missing and eq_missing % 5 == 0:
+                            log(f"WARNING: equity unmeasurable for {eq_missing} samples -> drawdown stop inactive"
+                                " (quoting is SELL-only while inventory is stale)")
                         if eq is not None and guard.add(eq):
                             log(f"max drawdown hit (peak {guard.peak:.2f}, last {eq:.2f}) -> stopping")
                             break
@@ -248,8 +257,11 @@ def main():
                             rec["actual_rewards"] = act
                             # per market: estimated vs paid (A/E per pool; a pool quoted for part of the day tells
                             # whether Polymarket normalises over the whole day as its docs say)
-                            got = act.get("by_market", {}) if isinstance(act, dict) else {}
-                            rec["per_market"] = {cid: {"est": round(e, 4), "paid": round(got.get(cid, 0.0), 4),
+                            got = act.get("by_market") if isinstance(act, dict) else None
+                            ok = isinstance(got, dict)           # None -> per-market fetch failed (not "unpaid")
+                            got = got if ok else {}
+                            rec["per_market"] = {cid: {"est": round(e, 4),
+                                                       "paid": round(got.get(cid, 0.0), 4) if ok else None,
                                                        "q": cfgs.get(cid, {}).get("q", "")[:60]}
                                                  for cid, e in sorted(by.items(), key=lambda x: -x[1])}
                             rec["paid_not_estimated"] = {k: v for k, v in got.items() if k not in by}
@@ -259,7 +271,7 @@ def main():
                         still.append((d, est, n, by))
                 pending = still
                 with open(state_f + ".tmp", "w") as fh:           # atomic: a crash mid-write keeps the old state
-                    json.dump({"day": cur_day.isoformat(), "day_est": day_est, "day_by": day_by,
+                    json.dump({"day": cur_day.isoformat(), "day_est": day_est, "day_by": day_by, "peak_eq": guard.peak,
                                "pending": [(d.isoformat(), e, n, by) for d, e, n, by in pending]}, fh)
                 os.replace(state_f + ".tmp", state_f)
                 # 7) trading equity (excludes estimated rewards) + drawdown stop (live: sampled after inventory)

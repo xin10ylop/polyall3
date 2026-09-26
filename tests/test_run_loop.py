@@ -96,7 +96,14 @@ def test_real_loss_stops_despite_fills_every_100s(monkeypatch, tmp_path):
     eq = lambda t: 100.0 if t < t0 + 600 else 70.0                        # real $30 loss after 10 min
     fills = lambda a, b: [(int(b), "c1", "bid", 5.0)] if int(b // 100) != int(a // 100) else []
     ran, _ = run(monkeypatch, tmp_path, eq, fills, 1.0, t0)
-    assert ran < 1800                                                     # stopped well before the hour
+    assert 600 < ran < 1800                                               # after the loss, well before the hour
+
+
+def test_no_stop_without_loss_despite_fills(monkeypatch, tmp_path):
+    t0 = 1_790_000_000.0
+    fills = lambda a, b: [(int(b), "c1", "bid", 5.0)] if int(b // 100) != int(a // 100) else []
+    ran, _ = run(monkeypatch, tmp_path, lambda t: 100.0 + (3.0 if int(t // 100) % 2 else 0.0), fills, 0.5, t0)
+    assert ran >= 0.5 * 3600 - 30                                         # ran the full half hour
 
 
 def test_per_market_reconciliation_across_midnight(monkeypatch, tmp_path):

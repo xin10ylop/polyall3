@@ -74,9 +74,11 @@ def test_n1_equity_not_double_counting_reserved_collateral(monkeypatch):
     b = mk()
     b.client.oo = [oo("a", "Y", "BUY", 0.49, 100), oo("b", "N", "BUY", 0.49, 100)]
     b.refresh_open(CFGS)
+    b.refresh_inventory(CFGS)
     e1 = b.trading_equity({"c": 0.5})
     b.client.oo = []
     b.refresh_open(CFGS)
+    b.refresh_inventory(CFGS)
     assert e1 == b.trading_equity({"c": 0.5}) == 100.0
 
 
@@ -175,24 +177,35 @@ def test_m5_old_fill_not_re_emitted_after_a_long_lull():
 
 def test_m4_redeemable_winner_stays_in_equity(monkeypatch):
     b = mk()
-    pos = [{"conditionId": "c", "outcomeIndex": 0, "size": 40, "currentValue": 38.8, "redeemable": False}]
+    pos = [{"conditionId": "c", "asset": "Y", "outcomeIndex": 0, "size": 40, "currentValue": 38.8, "redeemable": False}]
     monkeypatch.setattr("pmbot.live.api.positions", lambda u: pos)
+    b.refresh_inventory(CFGS)
     e1 = b.trading_equity({"c": 0.97})
     pos[0].update(redeemable=True, currentValue=40.0)
+    b.refresh_inventory(CFGS)
     e2 = b.trading_equity({"c": 0.97})
     assert abs(e1 - 138.8) < 1e-9 and abs(e2 - 140.0) < 1e-9
 
 
 def test_m3_equity_reads_positions_and_cash_together(monkeypatch):
     b = mk()
-    state = {"pos": [{"conditionId": "c", "outcomeIndex": 0, "size": 40, "currentValue": 20.8}]}
+    state = {"pos": [{"conditionId": "c", "asset": "Y", "outcomeIndex": 0, "size": 40, "currentValue": 20.8}]}
     monkeypatch.setattr("pmbot.live.api.positions", lambda u: state["pos"])
     b.client.balance = 80.0
+    b.refresh_inventory(CFGS)
     e1 = b.trading_equity({"c": 0.52})
-    b.inv = {"c": __import__("pmbot.engine", fromlist=["Inv"]).Inv(yes=40)}   # stale cycle-start inventory
-    state["pos"], b.client.balance = [], 100.8          # SELL 40 @ 0.52 lands between cycle start and equity read
+    state["pos"], b.client.balance = [], 100.8          # SELL 40 @ 0.52 lands; the loop re-reads positions, then cash
+    b.refresh_inventory(CFGS)
     e2 = b.trading_equity({"c": 0.52})
     assert abs(e1 - 100.8) < 1e-9 and abs(e2 - 100.8) < 1e-9     # no fake spike
+
+
+def test_audit5_n5_equity_skipped_when_positions_not_fresh(monkeypatch):
+    b = mk()
+    calls = []
+    monkeypatch.setattr("pmbot.live.api.positions", lambda u: calls.append(1) or None)   # data-api brownout
+    b.refresh_inventory(CFGS)
+    assert b.inv_stale and b.trading_equity({"c": 0.5}) is None and len(calls) == 1   # no second slow fetch
 
 
 def test_l1_already_gone_cancel_is_not_a_failure():

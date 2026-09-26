@@ -32,7 +32,9 @@ def lone(shape):
     if not shape:
         return False
     nb, sb, na, sa, ms = shape
-    return nb <= 1 and na <= 1 and sb <= 2 * ms and sa <= 2 * ms
+    # strictly below 2x min size: at most one qualifying (>= min size) order per side. The bid and the ask may still
+    # belong to two different makers.
+    return nb <= 1 and na <= 1 and sb < 2 * ms and sa < 2 * ms
 
 
 day = dt.date.fromisoformat(sys.argv[1])
@@ -41,7 +43,11 @@ t1 = t0 + 86400
 snaps = [x for x in map(json.loads, open('live/payout_check.jsonl'))
          if 'pools' in x and t0 <= x['ts'] < t1 and len(x['pools'][0]) >= 5]
 n = len(snaps)
-print(f"{day}: {n} snapshots covering {((snaps[-1]['ts'] - snaps[0]['ts']) / 3600 if n else 0):.1f} h")
+cover = (snaps[-1]['ts'] - snaps[0]['ts']) / 3600 if n else 0
+print(f"{day}: {n} snapshots covering {cover:.1f} h")
+if cover < 20:
+    print("WARNING: less than 20 h of the day covered; the payout covers the whole day, so predictions are not"
+          " comparable (use a full day of payout_check snapshots)")
 cnt, rate = collections.Counter(), {}
 for sn in snaps:
     for cid, r, q, qs, sh in sn['pools']:
@@ -90,4 +96,6 @@ for w, native, mm in sorted(prof, key=lambda x: -sum(rate[c] * cands[c] for c in
     print(f"{native:9.2f}  {pred:9.2f}   {len(other):3d} ({sum(1 for c in other if c in rate)}, ${other_r:.0f})  "
           f"{[(round(rate[c]), round(cands[c], 2), len(mk[c])) for c in by_w[w]]}  {w}")
 print("(lone pools: (rate $/day, lone-like fraction of snapshots, maker wallets filled in that pool on D)."
-      " Cleanest cases: one maker wallet in the pool and no other maker markets.)")
+      " Cleanest cases: one maker wallet in the pool and no other maker markets. 'Other maker markets' counts only"
+      " markets where W was FILLED; W may also quote elsewhere without fills, so a matching payout is suggestive,"
+      " not proof.)")

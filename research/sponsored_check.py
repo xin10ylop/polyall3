@@ -51,7 +51,7 @@ def funded_on_day(market, sponsor, t0, t1):
     """What a sponsorship funded during [t0, t1): ratePerMinute x the funded minutes inside the day.
     sponsorInfo(address,bytes32) -> (deposited, ratePerMinute, consumed, refunded, start, end, active)."""
     data = "0xfd5aa6f0" + "0" * 24 + sponsor[2:] + market[2:]
-    r = rpc("eth_call", [{"to": SPONSOR, "data": data}, "latest"])[2:]
+    r = rpc("eth_call", [{"to": SPONSOR, "data": data}, "latest"])[2:]   # latest state; start/end/rate rarely change
     w = [int(r[i * 64:(i + 1) * 64], 16) for i in range(7)]
     rpm, start, end = w[1] / 1e6, w[4], w[5]
     return rpm * max(0, min(end, t1) - max(start, t0)) / 60
@@ -76,6 +76,9 @@ for line in open('live/sponsored_books.jsonl'):
             if shape and shape[0] <= 1 and shape[2] <= 1:
                 m[2] += 1
 valid = {c for c, k in inrange.items() if k >= 0.9 * n_snap}
+if n_snap < 0.9 * 1440:
+    print(f"WARNING: only {n_snap} of 1440 minutes recorded; earned fractions cover the whole day, so the comparison is"
+          " only indicative")
 print(f"{day}: {n_snap} per-minute snapshots; {len(refund)} markets with sponsor refunds")
 print("funded  refund  earned_frac  pred_frac(scoring minutes)  lone-like share  cid   (pred n/a: no band config or"
       " mid outside 0.10-0.90, where two-sided makers are required and books cannot show them)")

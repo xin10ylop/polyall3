@@ -22,7 +22,7 @@ from . import api
 from .engine import Inv
 
 HOST = os.environ.get("PM_CLOB_HOST", "https://clob.polymarket.com")
-GONE = ("already matched", "matched", "not found", "already canceled", "already cancelled", "can't be found",
+GONE = ("already matched", "matched", "filled", "not found", "already canceled", "already cancelled", "can't be found",
         "does not exist", "not exist")
 
 
@@ -218,6 +218,7 @@ class LiveBroker:
                     w = str(why).lower()
                     if "fail" not in w and any(s in w for s in GONE):
                         continue          # already filled or already gone: not a failure (fills come via trades)
+                    self.log(f"cancel not confirmed ({oid[:10]}..): {str(why)[:120]}")
                     o = next((x for x in chunk if x["id"] == oid), None)
                     if o:
                         failed_cids.add(tok2cid.get(o["asset_id"]))
@@ -347,8 +348,9 @@ class LiveBroker:
         Positions and cash are read back to back so a fill between the two reads cannot fake a gain or a loss
         (residual data-api lag is absorbed by the caller's DrawdownGuard, which needs 3 consecutive samples). Resolved, not yet redeemed
         positions count at their redemption value; our markets at mid; anything else at its current price."""
-        fresh = getattr(self, "_pos_t", 0) > time.time() - 10
-        pos = self._pos if fresh else api.positions(self.user)   # the loop calls this right after refresh_inventory
+        if getattr(self, "_pos_t", 0) < time.time() - 10:
+            return None     # positions not freshly read this cycle (data-api brownout): skip rather than stall the loop
+        pos = self._pos     # the loop calls this right after refresh_inventory
         cash = self.cash_balance()
         if cash is None or pos is None:
             return None
