@@ -112,7 +112,9 @@ Environment variables:
 | This bot, quiet uncontested pools | formula + live books + 7-day risk replay; **lone-quoter payout unverified** | formula: ≈240–290%/day of locked collateral at a 100% share, before fill losses and competitor arrival; real: unknown until the pilot | ≈$50–100 *only if* the pilot confirms the payout *and* the bot keeps finding empty pools as competitors arrive (unmeasured). The supply of empty pools (≈$4–7k/day) caps scale. |
 
 Paper "rewards" (e.g. ≈$200–300/day for $100 across 5 pools) are the formula applied to simulated quotes. They
-assume a 100% share and the unverified lone-quoter payout. They are not evidence of income. Below ~$2–4k, capital limits how many pools the bot
+assume a 100% share and the unverified lone-quoter payout. They are not evidence of income. Fill losses are real
+either way: in a 5.8-h paper run at $1,000 they were ≈2.6% of the formula reward but ≈ −5.6% of capital per day
+(REPORT §6). The strategy only pays if the rewards do. Below ~$2–4k, capital limits how many pools the bot
 covers. Above that, the number of acceptable uncontested pools (≈160–189 pools / ≈$4.2–5.1k/day in the measured windows) is the cap.
 
 ## Repository
