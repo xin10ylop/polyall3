@@ -236,28 +236,36 @@ optimistic and is **not** used.
 | Leaderboard forensics | 3,102 wallets | See §1, rows 5, 8 and 9. |
 
 ## 6. Forward-test results
-Paper mode means live order books, real cache-busted trade prints, and simulated queue-position fills. The runs use the
-fixed code of commit e8cb20c, which already has the audit #3 fixes. They started 2026-09-26 20:53 UTC. The figures
-below are as of 23:00 UTC (2.1 h, 379 cycles each), and the runs continue.
+Paper mode means live order books, real cache-busted trade prints, and simulated queue-position fills.
 
-| Run | Pools quoted | Collateral locked | Formula reward rate | Fills | Fill P&L at mid | Jump cooldowns |
+**Run 1 (`fwd2_*`)** used commit e8cb20c, which includes the audit #3 fixes. It ran from 2026-09-26 20:53 UTC to
+2026-09-27 02:43 UTC: 5.8 h and 1,045 cycles each. It ended when a container restart changed the network proxy and
+every API call started failing. Run 2 (`fwd3_*`, latest code) was started at 02:50 UTC and continues.
+
+| Run 1 | Pools quoted (median) | Collateral locked | Formula reward (accrued → per day) | Fills | Fill P&L at mid | Jump cooldowns |
 |---|---|---|---|---|---|---|
-| $100 | 5 | $91 | $250/day | 0 | $0.00 | 0 |
-| $1,000 | 55 | $994 | $2,289/day | 3 (13.0 bid, 6.5 bid, 6.2 ask shares) | −$1.77 (range −$2.57 to +$0.58) | 8 |
+| $100 | 5 | $91 | $64.28 → $266/day | 2 (10.0 ask, 1.8 bid) | +$0.06 (range −$0.25 to +$0.45) | 6 |
+| $1,000 | 55 | $952 | $522.73 → $2,163/day | 17 | **−$13.64** (≈ −$56/day) | 31 |
 
 **What this shows**
-* The loop runs cleanly: no exceptions, a universe refresh every ~31 min, and every quote post-only and inside the
-  band.
-* Fills are rare, as the replay predicted. The $1,000 run's fill losses are small next to its reward *estimate*.
-* The jump guard fires on exactly the insider-prone topics §2.3 warned about. There were 27.5¢, 26¢, 20.5¢ and 13.5¢
-  moves in AI-model output-price markets within 5 minutes, and the guard pulled quotes to unwind-only.
-  * On paper, the only fill in such a market (6.2 shares) cost little. Live, a quote resting at the moment of such a
-    move can lose up to one quote size (≈$10–20).
+* **The loop runs cleanly.** There were no exceptions and a universe refresh every ~31 min. Every quote was
+  post-only and inside the band.
+* **Fill losses are small next to the *formula* reward, but not small next to capital.**
+  * The $1,000 run lost $13.64 in 5.8 h, which is 2.6% of its formula reward (in line with the 3–4% in the replay)
+    but ≈ −5.6% of capital per day.
+  * So the strategy is only profitable if the rewards are actually paid. At contested-farmer returns (≈0.25%/day),
+    these fill losses alone would make it a loser.
+* **Losses cluster in news-driven markets.** The jump guard fired 31 times at $1,000, on moves of up to 28¢ within
+  5 minutes. They were in AI-model price markets, sports futures (Japan Series, Korean Series), esports map picks,
+  box office and politics.
+  * Several fills happened right at a jump. Two examples: 20 shares on the ask as a Claude Opus price market jumped
+    23¢, and a bid-then-ask round trip in a Brazilian election market.
+  * Marks at mid can worsen further after a jump.
 
 **What this does not show**
 * **The reward numbers are the formula, not income.** They assume a 100% share of empty pools and the unverified
   lone-quoter payout.
-* 2 hours is far too short to measure fill losses; the 7-day replay in §2.4 is the better estimate.
+* 5.8 hours is short; the 7-day replay in §2.4 remains the better fill-loss estimate.
 * Paper fills cannot reproduce how other traders react to our quotes.
 
 Earlier runs, on pre-fix code, are not counted. They showed the same picture: $100 runs quoted 5 pools at
