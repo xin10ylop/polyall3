@@ -142,6 +142,15 @@ Measured on Saturday 2026-09-26 from 17:55 UTC, first over 2.25 h (28 snapshots)
     This is *consistent with* listed rates being paid to whoever scores, with no large haircut. It compares one
     moment with a different day's payout, though. The listing moves by ±$50k within a day and daily payouts over 30
     days ranged $96k–200k, so a ~10–20% haircut cannot be excluded.
+  * **Same-day check, 2026-09-26 (partial).** Native payout was **$107,500.49 to 2,123 wallets**. Evening snapshots
+    (21:21–24:00 UTC, 11 snapshots) averaged $117.6k/day payable (strict) and $123.9k/day (loose), a ratio of
+    0.91. The listing grew through the day ($134.7k at 14:05 → $183–197k late), so a full-day average would be lower
+    than the evening one. Again consistent, but not tight. A full-day comparison for 2026-09-27 is recording.
+  * **Partial lone-maker test, 2026-09-26** (`lone_maker_check.py`; only 2.4 h of snapshots). Six maker wallets were
+    identified in 9 pools that looked single-maker. None is a clean case.
+    * One wallet's only *filled* pool was a $15/day KBO game, and it was paid $14.98.
+    * But its reward history ($15–67/day for a month) and positions (≈$2.1k across many KBO games) show it quotes
+      many pools without fills. The match is a coincidence. **Inconclusive.**
   * **Sponsored pools: a per-market test becomes possible, but no lone-quoter evidence yet.** The sponsor contract
     `0xdd8d…9e8b` (verified ABI on Sourcify) emits three kinds of event:
     * `Sponsored(market, sponsor, amount, start, end, ratePerMinute)`;
