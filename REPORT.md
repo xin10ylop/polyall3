@@ -11,7 +11,7 @@ The final forward-test numbers in §6 and the last documentation edits have not 
 |---|---|
 | **Candidate edge** | **Liquidity-reward harvesting in quiet, uncontested pools.** Polymarket pays makers a daily reward per market by a published formula, split by each maker's share of qualifying resting liquidity. The bot rests minimum-size, two-sided, post-only quotes inside the reward band of pools where nobody else quotes and almost nothing trades. |
 | **Verified** | Rewards are real and paid on-chain; an auditor matched payouts to pUSD inflows to the cent in 16/16 wallets. Uncontested, quiet pools exist in quantity. In a 3.58-h window (Sat 17:55–21:30 UTC), **255 pools worth $6.8k/day stayed uncontested throughout**, and **160 of them ($4.2k/day) pass the bot's own filters** (302 / $8.3k and 189 / $5.1k over the first 2.25 h). Their median activity is 1 trade and ~$1 traded per 24 h. A pessimistic-on-fill-count 7-day replay shows fill losses of **≈3–4% of those pools' rewards**. |
-| **Payout evidence (new, audited)** | Polymarket paid **$128.5k** of liquidity rewards for 2026-09-25 (on-chain; $128,287 native + $240 sponsored). That is consistent with the ≈$115–130k/day of listed pools that had a scoring quote at a snapshot, so listed rates look genuinely paid to whoever quotes. It is a cross-day comparison, though, and cannot exclude a ~10–20% haircut. Partial sponsored-pool refunds suggest sponsored pools are paid per minute scored (§2.4). |
+| **Payout evidence (new, audited)** | Polymarket paid **$128.5k** of liquidity rewards for 2026-09-25 (on-chain; $128,287 native + $240 sponsored), then $107.5k native for Sat 09-26 and $152.1k for Sun 09-27. That is consistent with the ≈$115–130k/day of listed pools that had a scoring quote at a snapshot, so listed rates look genuinely paid to whoever quotes. Single snapshots are a noisy yardstick, though: the payout-to-snapshot ratio swung from 0.91 to 1.27 across two days, so a sizeable haircut cannot be excluded. Partial sponsored-pool refunds suggest sponsored pools are paid per minute scored (§2.4). |
 | **Not verified, and it decides everything** | Whether a *lone* minimum-size quoter is paid the pool, per minute. No public record attributes payouts to makers per market, so the $100 pilot is the test (§7). Competitors arrive quickly (27% of empty pools drew lasting in-band liquidity within 3.6 h, §2.3), so the long-run share will fall below 100%. |
 | **What typical farmers actually earn (audited)** | Pooled across all farmers: ≈0.5–0.7%/day at mid marks and ≈0.15–0.2%/day at liquidation marks. **Non-weather farmers (n = 5–6 survivors):** ≈0.2–0.3%/day at mid; over the latest 7 days, **−0.24%/day at liquidation marks**. Fill losses eat 60–85% of rewards. |
 | **Executable?** | Yes. Post-only limit orders, no latency race, requoting every 20 s. Five code audits; audits #3–#5 re-verified each round of fixes. The fixes for audit #5's LOW items are covered by the author's tests only. 43 regression tests. |
@@ -145,7 +145,15 @@ Measured on Saturday 2026-09-26 from 17:55 UTC, first over 2.25 h (28 snapshots)
   * **Same-day check, 2026-09-26 (partial).** Native payout was **$107,500.49 to 2,123 wallets**. Evening snapshots
     (21:21–24:00 UTC, 11 snapshots) averaged $117.6k/day payable (strict) and $123.9k/day (loose), a ratio of
     0.91. The listing grew through the day ($134.7k at 14:05 → $183–197k late), so a full-day average would be lower
-    than the evening one. Again consistent, but not tight. A full-day comparison for 2026-09-27 is recording.
+    than the evening one. Again consistent, but not tight.
+  * **2026-09-27 (Sunday).** The native payout was **$152,053.72 to 2,279 wallets**, 1.27× the early-morning
+    snapshots (00:02–02:53 UTC, strict payable $119.6k/day). Sunday's sports pools grow during the day.
+    * The three payouts measured are $128.3k (Fri), $107.5k (Sat) and $152.1k (Sun). They move with the day's listing,
+      and the snapshot ratio swings from 0.91 to 1.27.
+    * Single snapshots against daily payouts are too noisy to bound a haircut, as audit #5 warned.
+    * The planned full-day comparison, and the full-day runs of `lone_maker_check.py` / `sponsored_check.py`, could not
+      be done. Two container restarts on 2026-09-27 (≈02:43 and ≈02:57 UTC) killed the recorders, and nothing was
+      recorded after 02:57. The scripts are in `research/` for a future run on a stable machine.
   * **Partial lone-maker test, 2026-09-26** (`lone_maker_check.py`; only 2.4 h of snapshots). Six maker wallets were
     identified in 9 pools that looked single-maker. None is a clean case.
     * One wallet's only *filled* pool was a $15/day KBO game, and it was paid $14.98.
@@ -240,7 +248,8 @@ Paper mode means live order books, real cache-busted trade prints, and simulated
 
 **Run 1 (`fwd2_*`)** used commit e8cb20c, which includes the audit #3 fixes. It ran from 2026-09-26 20:53 UTC to
 2026-09-27 02:43 UTC: 5.8 h and 1,045 cycles each. It ended when a container restart changed the network proxy and
-every API call started failing. Run 2 (`fwd3_*`, latest code) was started at 02:50 UTC and continues.
+every API call started failing. Run 2 (`fwd3_*`, latest code) was restarted at 02:50 UTC, but a second container
+restart killed it after 6 minutes, so it is not counted.
 
 | Run 1 | Pools quoted (median) | Collateral locked | Formula reward (accrued → per day) | Fills | Fill P&L at mid | Jump cooldowns |
 |---|---|---|---|---|---|---|

@@ -16,7 +16,7 @@ pools**. It is the only candidate edge that was not rejected after a day of test
 >   but 39% of these pools are markets over a week old. 27% of pools empty at 17:55 drew a lasting competitor within
 >   3.6 h, and new empty pools keep appearing.
 > * **Whether Polymarket pays a lone quoter that way is unverified.** It decides everything. Aggregate on-chain
->   payouts are consistent with the listed rates of pools that have quotes (a ~10–20% haircut cannot be excluded),
+>   payouts ($107–152k/day over three days) are consistent with the listed rates of pools that have quotes, but too noisy to exclude a sizeable haircut,
 >   and sponsored pools appear to be paid per minute scored. No public record isolates a lone quoter, so the $100
 >   pilot is the test. A sponsored-pool recorder checks per-minute accrual only.
 > * **Next step:** paper mode, then **live with $100 for at least 3 full UTC days**. Within the first hour the bot logs
