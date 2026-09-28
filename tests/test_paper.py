@@ -52,6 +52,11 @@ def test_poll_fills_placed_filter_queue_and_dedupe(monkeypatch):
 
 
 
+def _taker_of(maker_row):
+    """The taker row of the same trade (same tx hash, other wallet, opposite side)."""
+    return dict(maker_row, proxyWallet="taker_wallet", side="SELL" if maker_row["side"] == "BUY" else "BUY")
+
+
 def test_h1_late_print_fills_order_that_was_resting(monkeypatch):
     import time as _t
     from pmbot import paper as P
@@ -67,7 +72,7 @@ def test_h1_late_print_fills_order_that_was_resting(monkeypatch):
         r["placed"] = t_sweep + 5
     sweep = {"transactionHash": "s1", "proxyWallet": "m", "asset": "Y", "size": "50", "price": "0.37", "side": "BUY",
              "timestamp": t_sweep}
-    monkeypatch.setattr(P.api, "market_trades", lambda cid, taker_only=True, **k: [] if taker_only else [sweep])
+    monkeypatch.setattr(P.api, "market_trades", lambda cid, taker_only=True, **k: [_taker_of(sweep)] if taker_only else [sweep, _taker_of(sweep)])
     ev = pb.poll_fills({"c": c})
     assert [(e[2], e[3]) for e in ev] == [("bid", 20.0)]          # the 0.40 bid (resting at sweep time) is filled
     assert abs(pb.cash + 8.0) < 1e-9
@@ -83,7 +88,7 @@ def test_h1_no_replay_of_old_prints_for_long_resting_orders(monkeypatch):
     r["placed"] = _t.time() - 5 * 3600                                # order resting for 5 h
     pr = {"transactionHash": "p1", "proxyWallet": "m", "asset": "Y", "size": "30", "price": "0.40", "side": "BUY",
           "timestamp": int(_t.time() - 4 * 3600)}
-    monkeypatch.setattr(P.api, "market_trades", lambda cid, taker_only=True, **k: [] if taker_only else [pr])
+    monkeypatch.setattr(P.api, "market_trades", lambda cid, taker_only=True, **k: [_taker_of(pr)] if taker_only else [pr, _taker_of(pr)])
     for _ in range(5):
         pb.poll_fills({"c": c})
     assert r["queue_ahead"] == 40.0 and pb.fills == []               # applied once, never replayed
@@ -103,6 +108,25 @@ def test_n3_one_print_fills_one_order_per_side_across_requote(monkeypatch):
         r["placed"] = ts                                   # requote in the same second as the print
     pr = {"transactionHash": "x", "proxyWallet": "m", "asset": "Y", "size": "50", "price": "0.39", "side": "BUY",
           "timestamp": ts}
-    monkeypatch.setattr(P.api, "market_trades", lambda cid, taker_only=True, **k: [] if taker_only else [pr])
+    monkeypatch.setattr(P.api, "market_trades", lambda cid, taker_only=True, **k: [_taker_of(pr)] if taker_only else [pr, _taker_of(pr)])
     ev = pb.poll_fills({"c": c})
     assert sum(e[3] for e in ev) == 20.0
+
+
+def test_audit8_taker_row_not_used_before_taker_feed_indexes_it(monkeypatch):
+    import time as _t
+    from pmbot import paper as P
+    pb = PaperBroker(log=lambda *a: None)
+    c = {"cid": "c", "yes": "Y", "no": "N"}
+    pb.sync({"c": [Order("c", "Y", "BUY", 0.40, 20, "bid", 0.40)]}, {"c": {"bids": [], "asks": []}})
+    r = next(iter(pb.resting.values())); r["placed"] = _t.time() - 60
+    now = int(_t.time())
+    # the TAKER bought YES at 0.39: read as if it were a maker leg, that row would fill our 0.40 bid
+    taker = {"transactionHash": "t1", "proxyWallet": "tk", "asset": "Y", "size": "20", "price": "0.39", "side": "BUY",
+             "timestamp": now}
+    feeds = {"all": [taker], "tak": []}                     # taker feed lags: not indexed yet
+    monkeypatch.setattr(P.api, "market_trades",
+                        lambda cid, taker_only=True, **k: feeds["tak"] if taker_only else feeds["all"])
+    assert pb.poll_fills({"c": c}) == []                    # not mistaken for a maker leg
+    feeds["tak"] = [taker]                                  # once indexed, it is recognised as the taker row
+    assert pb.poll_fills({"c": c}) == []

@@ -5,6 +5,8 @@
   at that price level when it was placed. A trade can only fill orders that were already resting when it happened.
 * The trade feed is read with a cache-buster (the data-api CDN caches it for up to 300 s); trades are de-duplicated
   by identity, not by a wall-clock cursor, so late-arriving prints are still applied.
+* A trade's legs are only used once the takerOnly=true feed also shows it (the two feeds are indexed separately);
+  otherwise the taker's own row could be mistaken for a maker leg.
 * The data-api indexes trades 30-90 s late. Orders that were repriced or cancelled are therefore kept for `RETAIN`
   seconds with their [placed, removed] interval, and a late print fills whichever order was resting when it traded
   (a live maker is filled at the moment of the sweep, not when the print shows up in the feed).
@@ -71,12 +73,16 @@ class PaperBroker:
                 continue
             c, rs = cfgs[cid], by_cid[cid]
             takers = {key(t) for t in tak}
+            taker_tx = {t["transactionHash"] for t in tak}
             oldest = min(r["placed"] for r in rs)
             makers = []
             for t in allr:
                 k = key(t)
                 if k in takers or k in self.seen or t["timestamp"] < oldest - 1:
                     continue
+                if t["transactionHash"] not in taker_tx:
+                    continue      # taker feed has not indexed this trade yet: its taker row cannot be told apart
+                                  # from the maker legs, so wait (do not mark as seen) and retry next cycle
                 self.seen[k] = t["timestamp"]
                 makers.append(t)
             for t in sorted(makers, key=lambda x: x["timestamp"]):

@@ -77,7 +77,8 @@ print(f"maker wallets identified in those pools: {len(by_w)}")
 
 def profile(w):
     rw = get(f"{DATA}/activity", {"user": w, "type": "REWARD", "start": t1 - 60, "end": t1 + 900, "limit": 50}) or []
-    native = sum(float(x.get("usdcSize") or 0) for x in rw if x["timestamp"] < t1 + 300)   # distributor ~00:00:15
+    # distributor batches land at ~00:00 or ~00:05 UTC; sponsored DistributedRewards at ~00:16 are also REWARD rows
+    native = sum(float(x.get("usdcSize") or 0) for x in rw if x["timestamp"] < t1 + 1800)
     a = get(f"{DATA}/trades", {"user": w, "limit": 500, "takerOnly": "false"}) or []
     tk = get(f"{DATA}/trades", {"user": w, "limit": 500, "takerOnly": "true"}) or []
     key = lambda t: (t["transactionHash"], t["asset"], t["size"], t["price"])

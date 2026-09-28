@@ -15,10 +15,15 @@ pools**. It is the only candidate edge that was not rejected after a day of test
 >   about once a day. A 7-day replay puts fill losses there at ≈3–4% of rewards. Newer markets are over-represented,
 >   but 39% of these pools are markets over a week old. 27% of pools empty at 17:55 drew a lasting competitor within
 >   3.6 h, and new empty pools keep appearing.
-> * **Whether Polymarket pays a lone quoter that way is unverified.** It decides everything. Aggregate on-chain
->   payouts ($107–152k/day over three days) are consistent with the listed rates of pools that have quotes, but too noisy to exclude a sizeable haircut,
->   and sponsored pools appear to be paid per minute scored. No public record isolates a lone quoter, so the $100
->   pilot is the test. A sponsored-pool recorder checks per-minute accrual only.
+> * **Whether Polymarket pays a lone quoter that way is unverified.** It decides everything.
+>   * Aggregate on-chain payouts ($107–152k/day over three days) are of the same order as the listed rates of pools
+>     that have quotes. They are too noisy to exclude a sizeable haircut, and lone-quoter-like pools are only ≈0.5% of
+>     those dollars, so they cannot test lone quoters.
+>   * Sponsored pools appear to be paid per minute scored.
+>   * One public native case fits full payment on two days (REPORT §2.4) but is not proof.
+>   * No public record isolates a lone quoter, so the $100 pilot is the test. A sponsored-pool recorder
+>     (`research/sponsored_recorder.py`) can test per-minute accrual only; its planned full-day run was cut short
+>     (REPORT §2.4).
 > * **Next step:** paper mode, then **live with $100 for at least 3 full UTC days**. Within the first hour the bot logs
 >   Polymarket's own reward percentage for our orders; each day it logs actual vs estimated payout **per market**.
 >   Scale only if they agree.
@@ -112,9 +117,10 @@ Environment variables:
 | This bot, quiet uncontested pools | formula + live books + 7-day risk replay; **lone-quoter payout unverified** | formula: ≈240–290%/day of locked collateral at a 100% share, before fill losses and competitor arrival; real: unknown until the pilot | ≈$50–100 *only if* the pilot confirms the payout *and* the bot keeps finding empty pools as competitors arrive (unmeasured). The supply of empty pools (≈$4–7k/day) caps scale. |
 
 Paper "rewards" (e.g. ≈$200–300/day for $100 across 5 pools) are the formula applied to simulated quotes. They
-assume a 100% share and the unverified lone-quoter payout. They are not evidence of income. Fill losses are real
-either way: in a 5.8-h paper run at $1,000 they were ≈2.6% of the formula reward but ≈ −5.6% of capital per day
-(REPORT §6). The strategy only pays if the rewards do. Below ~$2–4k, capital limits how many pools the bot
+assume a 100% share and the unverified lone-quoter payout. They are not evidence of income. Fill losses do not
+depend on the payout. In a 5.8-h paper run at $1,000 they were ≈2.6% of the formula reward, or ≈5.6% of capital per day
+if extrapolated from 17 fills (one fill at a 23¢ jump made up 40% of that). The $100 run's 2 fills were +$0.06 (REPORT
+§6). The strategy only pays if the rewards do. Below ~$2–4k, capital limits how many pools the bot
 covers. Above that, the number of acceptable uncontested pools (≈160–189 pools / ≈$4.2–5.1k/day in the measured windows) is the cap.
 
 ## Repository

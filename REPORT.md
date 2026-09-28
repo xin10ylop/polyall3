@@ -1,9 +1,10 @@
 # Polymarket edge search: full research report
 
-All measurements were taken on live Polymarket data (public APIs) on 2026-09-26. Trading venue: **Polymarket only**.
-Weather markets are excluded, as required. Most major claims were checked by an independent auditor agent (§5), and the
-corrections are incorporated below. Everything in §2.3–§2.4 has been through audit #6, and its corrections are applied.
-The final forward-test numbers in §6 and the last documentation edits have not been re-audited.
+All measurements were taken on live Polymarket data (public APIs) from 2026-09-26 to 02:53 UTC on 2026-09-27, plus
+the on-chain payouts for 09-25 to 09-27. Trading venue: **Polymarket only**. Weather markets are excluded, as required.
+Most major claims were checked by an independent auditor agent (§5), and the corrections are incorporated below. §2.3–§2.4
+were checked in audit #6. The 09-26/09-27 payout bullets, the partial lone-maker test and §6 were checked in report
+audit #3 (audit #8). The corrections from both are applied.
 
 ## 0. Bottom line
 
@@ -11,8 +12,8 @@ The final forward-test numbers in §6 and the last documentation edits have not 
 |---|---|
 | **Candidate edge** | **Liquidity-reward harvesting in quiet, uncontested pools.** Polymarket pays makers a daily reward per market by a published formula, split by each maker's share of qualifying resting liquidity. The bot rests minimum-size, two-sided, post-only quotes inside the reward band of pools where nobody else quotes and almost nothing trades. |
 | **Verified** | Rewards are real and paid on-chain; an auditor matched payouts to pUSD inflows to the cent in 16/16 wallets. Uncontested, quiet pools exist in quantity. In a 3.58-h window (Sat 17:55–21:30 UTC), **255 pools worth $6.8k/day stayed uncontested throughout**, and **160 of them ($4.2k/day) pass the bot's own filters** (302 / $8.3k and 189 / $5.1k over the first 2.25 h). Their median activity is 1 trade and ~$1 traded per 24 h. A pessimistic-on-fill-count 7-day replay shows fill losses of **≈3–4% of those pools' rewards**. |
-| **Payout evidence (new, audited)** | Polymarket paid **$128.5k** of liquidity rewards for 2026-09-25 (on-chain; $128,287 native + $240 sponsored), then $107.5k native for Sat 09-26 and $152.1k for Sun 09-27. That is consistent with the ≈$115–130k/day of listed pools that had a scoring quote at a snapshot, so listed rates look genuinely paid to whoever quotes. Single snapshots are a noisy yardstick, though: the payout-to-snapshot ratio swung from 0.91 to 1.27 across two days, so a sizeable haircut cannot be excluded. Partial sponsored-pool refunds suggest sponsored pools are paid per minute scored (§2.4). |
-| **Not verified, and it decides everything** | Whether a *lone* minimum-size quoter is paid the pool, per minute. No public record attributes payouts to makers per market, so the $100 pilot is the test (§7). Competitors arrive quickly (27% of empty pools drew lasting in-band liquidity within 3.6 h, §2.3), so the long-run share will fall below 100%. |
+| **Payout evidence (audited)** | Polymarket paid **$128.5k** of liquidity rewards for 2026-09-25 (on-chain; $128,287 native + $240 sponsored), then $107.5k (Sat 09-26) and $152.1k (Sun 09-27) native. Pools with a scoring quote at partial-day snapshots listed ≈$118–131k/day, so payouts are of the same order as the listed rates of quoted pools. The yardstick is weak: payable was nearly equal on the two days ($117.6k vs $119.6k strict) while payouts differed by $44.6k (ratios 0.91 and 1.27), so a sizeable across-the-board haircut cannot be excluded. The aggregate cannot test lone quoters either: lone-like pools are ≈0.5% of payable dollars. Partial sponsored-pool refunds suggest sponsored pools are paid per minute scored (§2.4). |
+| **Not verified, and it decides everything** | Whether a *lone* minimum-size quoter is paid the pool, per minute. One public native case fits full payment on two consecutive days (a $15/day pool paid $14.98 and $14.97, §2.4), but it cannot be tied to a single maker from public data. No public record attributes payouts to makers per market, so the $100 pilot is the test (§7). Competitors arrive quickly (27% of empty pools drew lasting in-band liquidity within 3.6 h, §2.3), so the long-run share will fall below 100%. |
 | **What typical farmers actually earn (audited)** | Pooled across all farmers: ≈0.5–0.7%/day at mid marks and ≈0.15–0.2%/day at liquidation marks. **Non-weather farmers (n = 5–6 survivors):** ≈0.2–0.3%/day at mid; over the latest 7 days, **−0.24%/day at liquidation marks**. Fill losses eat 60–85% of rewards. |
 | **Executable?** | Yes. Post-only limit orders, no latency race, requoting every 20 s. Five code audits; audits #3–#5 re-verified each round of fixes. The fixes for audit #5's LOW items are covered by the author's tests only. 43 regression tests. |
 | **Small capital?** | Yes, *if* the payout holds. A 20-share two-sided quote needs ≈$19 of collateral, so $100 covers ≈5 pools. |
@@ -40,7 +41,7 @@ leaderboard while having collected $24.3k in rewards. So reward farmers never sh
 
 ### 2.1 Mechanics (Polymarket docs, checked against live data)
 * Each rewarded market has a daily pool. The total varies intraday because of sponsored pools: **$134.7k/day across
-  16,430 markets at ~14:40 UTC; $182.6k/day across 16,242 at ~20:00 UTC**.
+  16,430 markets at ~14:05 UTC; $182.6k/day across 16,242 at ~20:00 UTC**.
 * The book is sampled once a minute. Each order within `v` cents of the size-cutoff-adjusted midpoint scores
   `S = ((v−s)/v)² × size`. Then `Q_min = max(min(Q1,Q2), max(Q1,Q2)/3)` for mids in 0.10–0.90, else
   `min(Q1,Q2)`. Payout = pool × your share of all makers' `Q_min`, credited at 00:00 UTC ($1 minimum). Some sponsored
@@ -127,7 +128,8 @@ Measured on Saturday 2026-09-26 from 17:55 UTC, first over 2.25 h (28 snapshots)
   the aggregate check, audited in audit #5. `sponsored_recorder.py` / `sponsored_check.py` and the refund analysis:
   checked in audit #6):
   * **Rewards are paid, and precisely.** Native rewards for UTC day D are paid in pUSD by one distributor EOA
-    (`0x2c27…a709`, via batch contract `0xd152…`) within ~20 s of 00:00 UTC on D+1. For 2026-09-25 that was
+    (`0x2c27…a709`, via batch contract `0xd152…`) within ~20 s of 00:00 UTC on D+1, or about 5 minutes later on some days (for 2026-09-27, 5 of 6 batches came at
+    00:05). For 2026-09-25 that was
     **$128,287.48 to 2,238 wallets**, and 300/300 sampled recipients have a matching data-api `REWARD` row.
     Sponsored rewards are paid separately by the sponsor contract `0xdd8d…9e8b` (`DistributedRewards`, ~00:16 UTC;
     $240.19 to 176 wallets), for **$128.5k to ≈2,260 wallets** in total. The other $86.87 it sent that night went
@@ -143,22 +145,35 @@ Measured on Saturday 2026-09-26 from 17:55 UTC, first over 2.25 h (28 snapshots)
     moment with a different day's payout, though. The listing moves by ±$50k within a day and daily payouts over 30
     days ranged $96k–200k, so a ~10–20% haircut cannot be excluded.
   * **Same-day check, 2026-09-26 (partial).** Native payout was **$107,500.49 to 2,123 wallets**. Evening snapshots
-    (21:21–24:00 UTC, 11 snapshots) averaged $117.6k/day payable (strict) and $123.9k/day (loose), a ratio of
-    0.91. The listing grew through the day ($134.7k at 14:05 → $183–197k late), so a full-day average would be lower
-    than the evening one. Again consistent, but not tight.
+    (21:21–23:47 UTC, 11 snapshots) averaged $117.6k/day payable (strict) and $123.9k/day (loose), ratios of 0.91 and
+    0.87. The listing was $134.7k at 14:05 and $173–196k (average $183k) in the evening. A full-day payable average
+    was probably lower than the evening one, but it was not measured. Consistent in order of magnitude, not tight.
   * **2026-09-27 (Sunday).** The native payout was **$152,053.72 to 2,279 wallets**, 1.27× the early-morning
-    snapshots (00:02–02:53 UTC, strict payable $119.6k/day). Sunday's sports pools grow during the day.
-    * The three payouts measured are $128.3k (Fri), $107.5k (Sat) and $152.1k (Sun). They move with the day's listing,
-      and the snapshot ratio swings from 0.91 to 1.27.
-    * Single snapshots against daily payouts are too noisy to bound a haircut, as audit #5 warned.
+    snapshots (00:02–02:53 UTC, strict payable $119.6k/day).
+    * The three payouts measured are $128.3k (Fri), $107.5k (Sat) and $152.1k (Sun). Payable at the partial-day
+      snapshots was almost the same on Saturday evening and Sunday early morning ($117.6k vs $119.6k strict), yet the
+      payouts differ by $44.6k. Why is unmeasured. Payouts over 30 days tracked the sports calendar ($96k–200k,
+      audit #5).
+    * Partial-day snapshot averages against daily payouts are too noisy to bound an across-the-board haircut, as audit
+      #5 warned. Even a perfect match would say nothing about lone quoters: lone-like pools are ≈0.5% of strict payable
+      ($569 and $711/day).
     * The planned full-day comparison, and the full-day runs of `lone_maker_check.py` / `sponsored_check.py`, could not
-      be done. Two container restarts on 2026-09-27 (≈02:43 and ≈02:57 UTC) killed the recorders, and nothing was
-      recorded after 02:57. The scripts are in `research/` for a future run on a stable machine.
+      be done. At ≈02:43 UTC on 2026-09-27 a network-proxy change made every API call fail for ≈6 minutes, and the
+      recorders logged empty data. They were restarted at ≈02:50, and a container restart at ≈02:57 killed them.
+      Nothing was recorded after 02:57. The scripts are in `research/` for a future run on a stable machine.
   * **Partial lone-maker test, 2026-09-26** (`lone_maker_check.py`; only 2.4 h of snapshots). Six maker wallets were
-    identified in 9 pools that looked single-maker. None is a clean case.
-    * One wallet's only *filled* pool was a $15/day KBO game, and it was paid $14.98.
-    * But its reward history ($15–67/day for a month) and positions (≈$2.1k across many KBO games) show it quotes
-      many pools without fills. The match is a coincidence. **Inconclusive.**
+    identified in 9 pools that looked single-maker. One case comes close:
+    * **The pool.** Wallet `0x0bc3…70dd` was the only filled maker on the bid of a $15/day KBO pool (a postponed May
+      game, min size 500). In every snapshot (09-26 21:21 → 09-27 02:53, and again on 09-28), that pool's book held a
+      single qualifying two-sided quote near min size: 0.50 × 540 and 0.54 × 600.
+    * **The payout.** The wallet was paid **$14.98 for 09-26 and $14.97 for 09-27**, 99.8–99.9% of the pool. The
+      formula predicts exactly this if the wallet owns both sides and is the only scorer. If the ask belonged to
+      another wallet, the formula would give it ≈$7.
+    * **The other maker.** The other maker filled in that pool rests an ask below min size. It was paid $0 on both
+      days, as the formula predicts.
+    * **Verdict.** This is the closest public case of a lone near-minimum-size quoter being paid the full pool per
+      minute. It is **suggestive, not proof**. Public data cannot show who owns the ask, and the wallet earned
+      $15–67/day over the past month, so quotes in other pools without fills cannot be excluded.
   * **Sponsored pools: a per-market test becomes possible, but no lone-quoter evidence yet.** The sponsor contract
     `0xdd8d…9e8b` (verified ABI on Sourcify) emits three kinds of event:
     * `Sponsored(market, sponsor, amount, start, end, ratePerMinute)`;
@@ -225,9 +240,9 @@ Measured on Saturday 2026-09-26 from 17:55 UTC, first over 2.25 h (28 snapshots)
 | Claude (this research) | Strategy search (10 hypotheses), bot design, coordinating the audits, and the fixes. |
 
 ## 4. Forward test (paper mode on live books and real trade prints)
-See §6 for results. Only runs after audit #2's fixes count: the corrected fill feed and the queue-position model. The
-earlier simulator (`research/rw_sim.py`) and the first paper runs read a CDN-cached trade feed, so their fill P&L is
-optimistic and is **not** used.
+See §6 for results. Only runs on code with audit #3's fixes (e8cb20c or later) count: the corrected fill feed, the
+queue-position model and the late-print attribution fix. The earlier simulator (`research/rw_sim.py`) and the first
+paper runs read a CDN-cached trade feed, so their fill P&L is optimistic and is **not** used.
 
 ## 5. Independent audits
 | Audit | Scope | Result |
@@ -239,6 +254,7 @@ optimistic and is **not** used.
 | Payout audit (#5) | On-chain reward totals, payable-vs-paid, lone-quoter evidence | Paid total SUPPORTED (300/300 recipients match; sponsored rewards add $327). Paid ≈ payable only PARTIALLY SUPPORTED: consistent, but a one-moment, cross-day comparison with low power. The payout looks per-minute, not per-day. The audit's sponsored figure ($327) included $86.87 of sponsor refunds; maker payouts were $240.19. Its per-market sponsored "payouts" turned out, from the contract's verified ABI, to be `SponsorRefunded` events (unearned funds returned to sponsors). The lone-quoter reading built on them was withdrawn, and the per-minute reading now rests on partial refunds in 8 pools (§2.4). |
 | Code audit #5 (verification) | Fixes for audit #4 (f0358d2), per-market reconciliation (3c0fcff), new research scripts | No CRITICAL/HIGH/MEDIUM in `pmbot`. Audit-#4 items N1, N3, N4 and L5 FIXED; N2 fixed with a residual tail (a positions-API lag over ~3 min, seen in 1 of 39 fills, can still false-stop); N5 PARTIAL. 7 LOW (silent loss of equity measurement, an unknown cancel reason blocking heartbeat marks, `paid` = 0 on a failed fetch, drawdown peak lost on restart, and test gaps) and 2 MEDIUM method issues in `lone_maker_check.py` / `sponsored_check.py` (partial-day coverage; a two-maker loophole in the lone-like proxy). All fixed, or explicitly guarded with warnings, with tests (43 passing). |
 | Report audit #2 (audit #6) | README/REPORT changes since the first report audit | 4 HIGH, 4 MEDIUM, 8 LOW, all applied here:<br>• refund fractions used the wrong denominator;<br>• reward-config `start_date` is not pool age, so "empty pools are mostly new" was withdrawn;<br>• the sponsored-pool test cannot isolate lone quoters;<br>• the correction was incomplete ($327 included refunds);<br>• a sign error in the §7 fill-loss rule;<br>• overstated audit coverage;<br>• a 50% share presented like a floor;<br>• stale README items. |
+| Report audit #3 (audit #8) | 09-26/09-27 payout bullets, partial lone-maker test, §6, README | 1 HIGH: the KBO lone-maker case had been dismissed as coincidence, but it repeated on 09-27 and fits full lone payment (now reported as suggestive). 5 MEDIUM: the aggregate "consistent" wording overreached; the §7 stop rule contradicted §6; the fill-loss extrapolation rested on one fill; stale audit-coverage labels; 5 of 17 paper fills were taker legs, now fixed in `paper.py` with a test. 7 LOW (timeline, small factual slips, payout timing, run-counting, reproducibility). All applied. |
 | Farmer-profitability audit | Independent re-derivation, including on-chain equity accounting for 16 wallets via archive RPC | **Partially supported**; corrected numbers adopted in §0/§2.2. |
 | Report audit | Every claim in README/REPORT vs the evidence files | Found 13 issues, including gate-default inconsistency, the invalid `qingkes` example, unwindowed pool figures, the unaudited "$100/day on $1–2.5k" row, and missing scripts. All were addressed in the version audited then, before §2.3's pool-age and §2.4's payout sections were added. |
 | Leaderboard forensics | 3,102 wallets | See §1, rows 5, 8 and 9. |
@@ -246,29 +262,37 @@ optimistic and is **not** used.
 ## 6. Forward-test results
 Paper mode means live order books, real cache-busted trade prints, and simulated queue-position fills.
 
-**Run 1 (`fwd2_*`)** used commit e8cb20c, which includes the audit #3 fixes. It ran from 2026-09-26 20:53 UTC to
-2026-09-27 02:43 UTC: 5.8 h and 1,045 cycles each. It ended when a container restart changed the network proxy and
-every API call started failing. Run 2 (`fwd3_*`, latest code) was restarted at 02:50 UTC, but a second container
-restart killed it after 6 minutes, so it is not counted.
+**Run 1 (`fwd2_*`)** used commit e8cb20c: audit #3's fixes, but before audit #4's paper requote-race fix and audit
+#8's taker-feed fix. It ran from 2026-09-26 20:53 UTC to 02:43 UTC on 09-27: 5.8 h and 1,045 cycles each. At 02:43 a
+network-proxy change made every API call fail. The runs were stopped at 02:49, and only cycles up to 02:43 are counted.
+Run 2 (`fwd3_*`, latest code) was started at ≈02:50, but a container restart killed it after ≈6 minutes, so it is not
+counted.
 
 | Run 1 | Pools quoted (median) | Collateral locked | Formula reward (accrued → per day) | Fills | Fill P&L at mid | Jump cooldowns |
 |---|---|---|---|---|---|---|
 | $100 | 5 | $91 | $64.28 → $266/day | 2 (10.0 ask, 1.8 bid) | +$0.06 (range −$0.25 to +$0.45) | 6 |
-| $1,000 | 55 | $952 | $522.73 → $2,163/day | 17 | **−$13.64** (≈ −$56/day) | 31 |
+| $1,000 | 55 | $952 | $522.73 → $2,163/day | 17 | **−$13.64** | 31 |
+
+Figures are truncated at 02:43 UTC (ts ≤ 1790476990). `research/fwd_summary.py` on the untruncated logs gives 5.91 h and
+$261/day / $2,124/day, because the post-outage cycles quote nothing.
 
 **What this shows**
-* **The loop runs cleanly.** There were no exceptions and a universe refresh every ~31 min. Every quote was
-  post-only and inside the band.
-* **Fill losses are small next to the *formula* reward, but not small next to capital.**
-  * The $1,000 run lost $13.64 in 5.8 h, which is 2.6% of its formula reward (in line with the 3–4% in the replay)
-    but ≈ −5.6% of capital per day.
+* **The loop ran cleanly:** no exceptions, and a universe refresh every ~31 min. Every quote is post-only and inside
+  the band by construction; code audit #4's fuzz checked this, but quote prices are not logged.
+* **Fill losses are small next to the *formula* reward, but not next to capital.**
+  * The $1,000 run lost $13.64 at mid marks in 5.8 h. That is 2.6% of its formula reward, in line with the replay's
+    3–4%. Extrapolated, it is ≈5.6% of capital per day.
+  * The extrapolation is fragile. It rests on 17 fills, and one of them accounts for ≈$5.5 of the loss at the
+    post-jump mid: 20 shares on the ask as a Claude Opus price market jumped 23¢, 36 s before the cut-off.
+  * The $100 run's 2 fills made +$0.06.
   * So the strategy is only profitable if the rewards are actually paid. At contested-farmer returns (≈0.25%/day),
-    these fill losses alone would make it a loser.
+    fill losses of this size would make it a loser.
 * **Losses cluster in news-driven markets.** The jump guard fired 31 times at $1,000, on moves of up to 28¢ within
   5 minutes. They were in AI-model price markets, sports futures (Japan Series, Korean Series), esports map picks,
   box office and politics.
-  * Several fills happened right at a jump. Two examples: 20 shares on the ask as a Claude Opus price market jumped
-    23¢, and a bid-then-ask round trip in a Brazilian election market.
+  * Several fills happened right at a jump: 20 shares on the ask as a Claude Opus price market jumped 23¢, 6 shares on
+    the ask as a Claude Fable price market jumped 26¢, and two 9-share bids in Resident Evil box-office markets that
+    jumped 6–28¢.
   * Marks at mid can worsen further after a jump.
 
 **What this does not show**
@@ -276,9 +300,13 @@ restart killed it after 6 minutes, so it is not counted.
   lone-quoter payout.
 * 5.8 hours is short; the 7-day replay in §2.4 remains the better fill-loss estimate.
 * Paper fills cannot reproduce how other traders react to our quotes.
+* **5 of the 17 fills at $1,000 were matched to the *taker* leg of a real trade.** The cause was the takerOnly=true
+  feed lagging the full feed, so the taker's row was not yet subtracted. `pmbot/paper.py` now waits until the taker
+  feed shows a trade before using its legs (audit #8, with a test). Run 1's fill P&L carries this uncertainty. A
+  resting real order could also have filled us, so these fills are not necessarily phantom.
 
-Earlier runs, on pre-fix code, are not counted. They showed the same picture: $100 runs quoted 5 pools at
-$218–265/day for 0.6–1.3 h with 0–1 fills, and $1,000 runs quoted 54 pools at $2.4–2.5k/day with 0–1 fills.
+Earlier runs, on code before audit #3's fixes, are not counted. They showed the same picture: $100 runs quoted 5 pools
+at $218–265/day for 0.6–1.3 h with 0–1 fills, and $1,000 runs quoted 54 pools at $2.4–2.5k/day with 0–1 fills.
 
 ## 7. The decisive test: a $100 live pilot (procedure and pre-committed decision rule)
 The public aggregate checks have been done (§2.4), and no public record isolates a lone quoter. The question that decides between a small edge (≈0.2–0.3%/day, like
@@ -308,7 +336,9 @@ says. Only a live account can answer it.
    `cumulative A − net P&L` (rewards received minus net P&L).
    * `A ≥ 0.5·E` for 3 consecutive days, net P&L > 0, **and** fill losses smaller than half of cumulative `A`: scale
      stepwise (e.g. ×2 every 3 days), watching `A/E` and fill losses as competition arrives.
-   * `A < 0.2·E`: lone quoters are not paid as modelled. **Stop.** At ≈0.2–0.3%/day it is not worth running small.
+   * `A < 0.2·E`: lone quoters are not paid as modelled. **Do not scale.** Judge the $100 run by net P&L alone. Run
+     1's fill losses were ≈2.6% of E (§6), so even A ≈ 0.05·E would cover them. Keep running at $100 only while net P&L
+     over the 3 days is positive; otherwise **stop**.
    * In between: run a week at $100, then decide.
 7. **Risks you accept:**
    * inventory from fills (≤1 quote size per market);
